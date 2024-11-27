@@ -17,6 +17,7 @@
 */
 
 #include "Arduino.h"
+#include "tcal9539.h"
 uint32_t lastUlPin = 0xFF;
 uint32_t lastUlMode= 0xFF;
 
@@ -26,9 +27,6 @@ uint32_t lastUlMode= 0xFF;
 
 #ifdef __cplusplus
  extern "C" {
- extern void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode );
- extern void tcal9539_digitalWrite( uint32_t ulPin, uint32_t ulVal );
- extern int tcal9539_digitalRead( uint32_t ulPin);
 #endif
 
 void pinMode( uint32_t ulPin, uint32_t ulMode )
@@ -37,7 +35,7 @@ void pinMode( uint32_t ulPin, uint32_t ulMode )
   lastUlMode = ulMode;
 
   // Bird clock specific GPIO expansion
-  if (ulPin & TCAL_MASK) {
+  if (tcal9539_isOwned(ulPin)) {
     return tcal9539_pinMode(ulPin, ulMode);
   }
 
@@ -91,8 +89,8 @@ void pinMode( uint32_t ulPin, uint32_t ulMode )
 void digitalWrite( uint32_t ulPin, uint32_t ulVal )
 {
   // Bird clock specific GPIO expansion
-  if (ulPin & TCAL_MASK) {
-    return tcal9539_digitalWrite(ulPin, ulMode);
+  if (tcal9539_isOwned(ulPin)) {
+    return tcal9539_digitalWrite(ulPin, ulVal);
   }
 
   // Handle the case the pin isn't usable as PIO
@@ -128,7 +126,7 @@ int digitalRead( uint32_t ulPin )
 {
 
   // Bird clock specific GPIO expansion
-  if (ulPin & TCAL_MASK) {
+  if (tcal9539_isOwned(ulPin)) {
     return tcal9539_digitalRead(ulPin);
   }
 
