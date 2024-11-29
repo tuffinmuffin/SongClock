@@ -1,6 +1,6 @@
 //support all fats
 #define SD_FAT_TYPE 3
-
+#include <Arduino.h>
 #include <SdFat.h>
 #include "FreeStack.h"
 #include "sdios.h"
@@ -80,14 +80,19 @@ void cidDmp() {
 }
 
 void setupGpio() {
+
+  //internal inputs
+  pinMode(GPIO_INT, INPUT);
+
+  //setup TCAL
+  initTcal9539(0x74, GPIO_INT);
   //external Input
-  pinMode(USER_SEL, INPUT_PULLDOWN);
-  //while(1) {;}
-  pinMode(USER_UP, INPUT_PULLDOWN);
-  pinMode(USER_DOWN, INPUT_PULLDOWN);
+  pinMode(USER_SEL, INPUT_PULLDOWN | TCAL_INT_ENABLE);
+  pinMode(USER_UP, INPUT_PULLDOWN | TCAL_INT_ENABLE);
+  pinMode(USER_DOWN, INPUT_PULLDOWN | TCAL_INT_ENABLE);
   pinMode(USER_POWER, INPUT_PULLDOWN);
   pinMode(E_BUSY, INPUT);
-  pinMode(RTC_ALARM, INPUT_PULLUP);
+  pinMode(RTC_ALARM, INPUT_PULLUP | TCAL_INT_ENABLE);
   pinMode(MINUTE_HALL, INPUT);
   pinMode(HOUR_HALL, INPUT);
   //TODO setup interrupts
@@ -100,8 +105,6 @@ void setupGpio() {
   pinMode(E_ENABLE, OUTPUT);
   pinMode(VCC_HALL, OUTPUT);
 
-  //internal inputs
-  pinMode(GPIO_INT, INPUT);
   //TODO add interrupt
 
   //internal outputs
@@ -117,9 +120,12 @@ void setupGpio() {
   pinMode(STP_EN, OUTPUT);
 }
 
+uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr);
+
 // the setup routine runs once when you press reset:
 void setup() {
   Wire.begin();
+  Wire.setTimeout(10);
 
   pinMode(13, OUTPUT);
   Serial.begin(115200);
@@ -134,8 +140,16 @@ void setup() {
   Serial.println("GPIO Done\n");
   
   mp3.Init(14, 5);
+  pinMode(13, OUTPUT);
+  int led = 0;
   while(1) {
-    Serial.printf("%d %d %d %d\n", digitalRead(USER_SEL), digitalRead(USER_UP), digitalRead(USER_DOWN), digitalRead(USER_POWER));
+    digitalWrite(13, led);
+    led = !led;
+
+    //Serial.printf("0x%02x:0x%02x:0x%02x\n",  (uint32_t)tcal9539_reg8Read(0x74, 0x4A), (uint32_t)tcal9539_reg8Read(0x74, 0x4C), (uint32_t)tcal9539_reg8Read(0x74, 0));
+    //Serial.printf("%d\n", tcal9539_reg8Read(0x74, 0));
+    bool intStat = digitalRead(GPIO_INT);
+    Serial.printf("%d %d %d %d int %d\n", digitalRead(USER_SEL), digitalRead(USER_UP), digitalRead(USER_DOWN), digitalRead(USER_POWER), intStat);
     delay(1000);
   }
 

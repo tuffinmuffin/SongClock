@@ -7,6 +7,9 @@ uint8_t tcal9539_addr_map[MAX_TCAL_DEVICES] = {TCAL_ADDR_LL};
 struct tcal_pin tcal_data[MAX_TCAL_DEVICES][TCAL9539_CHANNELS] = {};
 
 struct tcal_pin* getTcal9539Chan(uint32_t ulPin) {
+    if(tcal9539_count == 0) {
+      return nullptr;
+    }
     return &tcal_data[0][ulPin & 0xFF];
 }
 
@@ -28,6 +31,7 @@ void tcalInt() {
   //in case we get an interrupt while doing i2c transaction we don't operate here.
   //
   intTriggered = true;
+  Serial.println("Interrupt");
 }
 
 
@@ -37,14 +41,15 @@ bool initTcal9539(uint8_t addr, int32_t intPin) {
       return false;
     }
 
-    Wire.begin();
+    //Wire.begin(); //TODO track down why call twice
     tcal9539_addr_map[tcal9539_count] = addr;
     tcal9539_count++;
 
+    pinMode(intPin, INPUT);
 
     //TODO register interrupt
     if(intPin > 0) {
-      attachInterrupt(digitalPinToInterrupt(intPin), tcalInt, RISING);
+      //attachInterrupt(digitalPinToInterrupt(intPin), tcalInt, RISING);
     }
     
     return true;
@@ -124,6 +129,12 @@ void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
         pin->dirAddr = TCAL9539_CONFIG0;
         pin->pullEnAddr = TCAL9539_PULLEN0;
         pin->pullDirAddr = TCAL9539_PULLDIR0;
+        pin->inputLatchAddr = TCAL9539_INPUTLATCH0;
+        pin->interruptMaskAddr = TCAL9539_INTMASK0;
+        pin->interruptStatAddr = TCAL9539_INTSTATUS0;
+        pin->polarityInvAddr = TCAL9539_POLINVERT0;
+        //TODO Add drive strength
+        //TODO add open drain
       }
       else {
         pin->index = (ulPin - 10) & 0x7;
@@ -131,13 +142,19 @@ void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
         pin->wrAddr = TCAL9539_OUTPUT1;
         pin->dirAddr = TCAL9539_CONFIG1;
         pin->pullEnAddr = TCAL9539_PULLEN1;
-        pin->pullDirAddr = TCAL9539_PULLDIR1;           
+        pin->pullDirAddr = TCAL9539_PULLDIR1;
+        pin->inputLatchAddr = TCAL9539_INPUTLATCH1;
+        pin->interruptMaskAddr = TCAL9539_INTMASK1;
+        pin->interruptStatAddr = TCAL9539_INTSTATUS1;
+        pin->polarityInvAddr = TCAL9539_POLINVERT1;
+        //TODO Add drive strength
+        //TODO add open drain
       }
       pin->minAssertTimeUs = 0;
       pin->minAssertHeldUs = 500000;
     }
 
-  switch ( ulMode )
+  switch ( ulMode & 0xF )
   {
     case INPUT:
       pin->input = true;
@@ -178,6 +195,16 @@ void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
   tcal9539_regRMW(pin->i2cAddr, pin->dirAddr, mask, mask);
   tcal9539_regRMW(pin->i2cAddr, pin->pullDirAddr, pin->pullUp << pin->index, mask);
   tcal9539_regRMW(pin->i2cAddr, pin->pullEnAddr, pin->pullEn << pin->index, mask);
+
+  uint8_t data = ulMode & TCAL_INT_ENABLE ? 0 : mask;
+  Serial.printf("0x%04x:0x%04x, int data 0x%08x & 0x%08x\n", ulPin, ulMode, data, mask);
+  tcal9539_regRMW(pin->i2cAddr, pin->interruptMaskAddr, data, mask);
+
+  data = ulMode & TCAL_INVERT ? mask : 0;
+  tcal9539_regRMW(pin->i2cAddr, pin->invertPol, data, mask);
+
+  data = ulMode & TCAL_INPUT_LATCH ? mask : 0;
+  tcal9539_regRMW(pin->i2cAddr, pin->inputLatchAddr, data, mask);
 
 }
 

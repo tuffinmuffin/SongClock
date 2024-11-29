@@ -1,6 +1,13 @@
 #include <Arduino.h>
 #include <stdint.h>
 
+//Mode bitmasks
+#define TCAL_INT_ENABLE   0x10
+#define TCAL_DRIVE_WEAK   0x20
+#define TCAL_INVERT       0x40
+#define TCAL_INPUT_LATCH  0x80
+#define TCAL_OPEN_DRAIN   0x100
+
 #define MAX_TCAL_DEVICES (1)
 
 //9/10 invalid
@@ -98,6 +105,10 @@ struct tcal_pin {
     uint8_t dirAddr;
     uint8_t pullEnAddr;
     uint8_t pullDirAddr;
+    uint8_t interruptMaskAddr;
+    uint8_t interruptStatAddr;
+    uint8_t inputLatchAddr;
+    uint8_t polarityInvAddr;
     uint8_t index;
     uint8_t fullIndex;
     bool input;
