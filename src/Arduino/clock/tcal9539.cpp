@@ -1,6 +1,5 @@
 #include "tcal9539.h"
 #include <Wire.h>
-#include "LowPower.h"
 
 //global data structure
 int8_t tcal9539_count = 0;
@@ -12,17 +11,18 @@ struct tcal_pin* getTcal9539Chan(uint32_t ulPin) {
 }
 
 uint8_t getTcal9539Addr(uint32_t pin) {
-    uint8_t addr = (uint8_t) (pin >> TCAL_ADDR_SHIFT) & 0xFF;
+    return (uint8_t) (pin >> TCAL_ADDR_SHIFT) & 0xFF;
+    /*uint8_t addr = (uint8_t) (pin >> TCAL_ADDR_SHIFT) & 0xFF;
     for(int i = 0; i < tcal9539_count; i++) {
         if(tcal9539_addr_map[i] == addr) {
             return i;
         }
     }
     //not found return default. May be an issue
-    return 0x0;
+    return 0x0;*/
 }
 
-static intTriggered = false;
+static bool intTriggered = false;
 //TODO expand to support multiple interupts
 void tcalInt() {
   //in case we get an interrupt while doing i2c transaction we don't operate here.
@@ -45,21 +45,27 @@ bool initTcal9539(uint8_t addr, int32_t intPin) {
     //TODO register interrupt
     if(intPin > 0) {
       attachInterrupt(digitalPinToInterrupt(intPin), tcalInt, RISING);
-      LowPower.attachInterruptWakeup()
     }
     
     return true;
 }
 
 uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr) {
+    //flush
+    while(Wire.available()) { Wire.read();}
     Wire.beginTransmission(device);
     Wire.write(addr);
-    uint8_t data = Wire.read();
-    Wire.endTransmission();
-    return data;
+    int status = Wire.endTransmission();
+    //Serial.printf("read8 %02x %02x %d\n", device, addr, status);
+    Wire.requestFrom(device, 1);
+    //TODO error handle while(Wire.available()< 1) {;}
+    uint8_t val = Wire.read();
+    Serial.printf("%02x read: %02x %02x\n", device, addr, val);
+    return val;
 }
 
 void tcal9539_reg8Write(uint8_t device, uint8_t addr, uint8_t val) {
+    Serial.printf("%02x write: %02x %02x\n", device, addr, val);
     Wire.beginTransmission(device);
     Wire.write(addr);
     Wire.write(val);
@@ -70,11 +76,14 @@ void tcal9539_reg8Write(uint8_t device, uint8_t addr, uint8_t val) {
 uint16_t tcal9539_reg16Read(uint8_t device, uint8_t addr) {
     Wire.beginTransmission(device);
     Wire.write(addr);
-    uint16_t data = Wire.read();
-    data |= (uint16_t)Wire.read() << 8;
     Wire.endTransmission();
+    Wire.requestFrom(device, 2);
+    while(Wire.available()< 2) {;}
+    uint16_t val = Wire.read();
+    val |= (uint16_t)Wire.read() << 8;
+    
 
-    return data;
+    return val;
 }
 
 void tcal9539_reg16Write(uint8_t device, uint8_t addr, uint16_t val) {
@@ -90,23 +99,25 @@ void tcal9539_reg16Write(uint8_t device, uint8_t addr, uint16_t val) {
 uint8_t tcal9539_regRMW(uint8_t device, uint8_t addr, uint8_t val, uint8_t mask) {
     uint8_t data = tcal9539_reg8Read(device, addr);
     uint8_t data0 = data;
-    data &= mask;
+    data &= ~mask;
     data |= val & mask;
     tcal9539_reg8Write(device,addr,data);
     return data0;
 }
 
 void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
+    //Serial.printf("Configuring 0x%08x as %d\n", ulPin, ulMode);
     struct tcal_pin* pin = getTcal9539Chan(ulPin);
     if(!pin) { 
-      Serial.printf("Invalid TCAL %d\n", ulPin);
+      //Serial.printf("Invalid TCAL %d\n", ulPin);
       return;
       }
     if(pin->i2cAddr == 0) {
 
       pin->i2cAddr = getTcal9539Addr(ulPin);
+      Serial.printf("addr is now %02x\n", pin->i2cAddr);
       //init structure for first call
-      if(ulPin & 0xFF > 10) {
+      if((ulPin & 0xFF) < 10) {
         pin->index = ulPin & 0x7;
         pin->rdAddr = TCAL9539_INPUT0;
         pin->wrAddr = TCAL9539_OUTPUT0;
@@ -126,7 +137,7 @@ void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
       pin->minAssertHeldUs = 500000;
     }
 
-switch ( ulMode )
+  switch ( ulMode )
   {
     case INPUT:
       pin->input = true;
@@ -173,7 +184,7 @@ switch ( ulMode )
 void tcal9539_digitalWrite( uint32_t ulPin, uint32_t ulVal ) {
     struct tcal_pin* pin = getTcal9539Chan(ulPin);
     if(!pin || !pin->i2cAddr) {
-        Serial.printf("TCAL write failed %d\n", ulPin);
+        Serial.printf("TCAL write failed 0x%08x %04x - %d\n", ulPin, pin->i2cAddr, ulVal);
         return;
     }
     int mask = 1 << pin->index;

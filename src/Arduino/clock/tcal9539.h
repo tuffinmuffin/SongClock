@@ -18,7 +18,8 @@
 
 #define TCAL_ADDR_SHIFT (16)
 
-#define TCALPIN(addr, x) ((TCAL_MASK && (addr << TCAL_ADDR_SHIFT)) | ~(TCAL_MASK)&&x)
+//0x00FF00YY where FF is the i2c addree and YY is the pin 0-7/10-18
+#define TCALPIN(addr, x) ((TCAL_MASK & ((uint32_t)addr << TCAL_ADDR_SHIFT)) | ~(TCAL_MASK) & x)
 
 #define E0 TCALPIN(TCAL_ADDR_LL, 0)
 #define E1 TCALPIN(TCAL_ADDR_LL, 1)

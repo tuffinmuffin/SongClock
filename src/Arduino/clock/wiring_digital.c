@@ -33,7 +33,7 @@ void pinMode( uint32_t ulPin, uint32_t ulMode )
 {
   lastUlPin = ulPin;
   lastUlMode = ulMode;
-
+  
   // Bird clock specific GPIO expansion
   if (tcal9539_isOwned(ulPin)) {
     return tcal9539_pinMode(ulPin, ulMode);
