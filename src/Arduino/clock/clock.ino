@@ -2,11 +2,13 @@
 #define SD_FAT_TYPE 3
 #include <Arduino.h>
 #include <SdFat.h>
+#include <Adafruit_SleepyDog.h>
 #include "FreeStack.h"
 #include "sdios.h"
 #include "Mp3Player.h"
 
 #include "tcal9539.h"
+#include "clockHand.h"
 
 /*
  *  Play an MP3 file from an SD card
@@ -56,6 +58,20 @@ static const int STP_B4       = 7;
 static const int STP_EN       = 1;
 
 
+/**
+ * \brief Put the system to sleep waiting for interrupt
+ *
+ * Executes a device DSB (Data Synchronization Barrier) instruction to ensure
+ * all ongoing memory accesses have completed, then a WFI (Wait For Interrupt)
+ * instruction to place the device into the sleep mode specified by
+ * \ref system_set_sleepmode until woken by an interrupt.
+ */
+static inline void system_sleep(void)
+{
+	__DSB();
+	__WFI();
+}
+
 //------------------------------------------------------------------------------
 // Store error strings in flash to save RAM.
 #define error(s) sd.errorHalt(&Serial, F(s))
@@ -90,7 +106,7 @@ void setupGpio() {
   pinMode(USER_SEL, INPUT_PULLDOWN | TCAL_INT_ENABLE);
   pinMode(USER_UP, INPUT_PULLDOWN | TCAL_INT_ENABLE);
   pinMode(USER_DOWN, INPUT_PULLDOWN | TCAL_INT_ENABLE);
-  pinMode(USER_POWER, INPUT_PULLDOWN);
+  pinMode(USER_POWER, INPUT_PULLDOWN | TCAL_INT_ENABLE);
   pinMode(E_BUSY, INPUT);
   pinMode(RTC_ALARM, INPUT_PULLUP | TCAL_INT_ENABLE);
   pinMode(MINUTE_HALL, INPUT);
@@ -150,11 +166,18 @@ void setup() {
     //Serial.printf("%d\n", tcal9539_reg8Read(0x74, 0));
     bool intStat = digitalRead(GPIO_INT);
     Serial.printf("%d %d %d %d int %d\n", digitalRead(USER_SEL), digitalRead(USER_UP), digitalRead(USER_DOWN), digitalRead(USER_POWER), intStat);
+    //int sleepMS = Watchdog.sleep();
+    int sleepMS = 0;
+    //USBDevice.attach();
+    //while (!Serial)
+    //  delay(10);
+    Serial.printf("Slept for %d\n", sleepMS);
     delay(1000);
+    break;
   }
 
   //mp3.Play("test.mp3", false);
-  while (!sd.begin(SD_CS, 12000000)) {
+  while (!sd.begin(SD_CS, 12000000/2)) {
       Serial.println("Card failed, or not present");
       delay(10000);
     }

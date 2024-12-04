@@ -5,6 +5,7 @@
 int8_t tcal9539_count = 0;
 uint8_t tcal9539_addr_map[MAX_TCAL_DEVICES] = {TCAL_ADDR_LL};
 struct tcal_pin tcal_data[MAX_TCAL_DEVICES][TCAL9539_CHANNELS] = {};
+int intPinList[MAX_TCAL_DEVICES] = {};
 
 struct tcal_pin* getTcal9539Chan(uint32_t ulPin) {
     if(tcal9539_count == 0) {
@@ -43,13 +44,14 @@ bool initTcal9539(uint8_t addr, int32_t intPin) {
 
     //Wire.begin(); //TODO track down why call twice
     tcal9539_addr_map[tcal9539_count] = addr;
+    intPinList[tcal9539_count] = intPin;
     tcal9539_count++;
 
     pinMode(intPin, INPUT);
-
-    //TODO register interrupt
+    
     if(intPin > 0) {
-      //attachInterrupt(digitalPinToInterrupt(intPin), tcalInt, RISING);
+      pinMode(intPin, INPUT);
+      attachInterrupt(digitalPinToInterrupt(intPin), tcalInt, FALLING);
     }
     
     return true;
