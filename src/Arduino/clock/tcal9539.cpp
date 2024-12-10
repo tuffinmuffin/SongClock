@@ -67,12 +67,12 @@ uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr) {
     Wire.requestFrom(device, 1);
     //TODO error handle while(Wire.available()< 1) {;}
     uint8_t val = Wire.read();
-    Serial.printf("%02x read: %02x %02x\n", device, addr, val);
+    //Serial.printf("%02x read: %02x %02x\n", device, addr, val);
     return val;
 }
 
 void tcal9539_reg8Write(uint8_t device, uint8_t addr, uint8_t val) {
-    Serial.printf("%02x write: %02x %02x\n", device, addr, val);
+    //Serial.printf("%02x write: %02x %02x\n", device, addr, val);
     Wire.beginTransmission(device);
     Wire.write(addr);
     Wire.write(val);
@@ -188,22 +188,23 @@ void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
   }
 
   uint8_t mask = 1 << pin->index;
-
+  printf("Starting TCAL writes\n");
   if(pin->input == false) {
     tcal9539_regRMW(pin->i2cAddr, pin->dirAddr, 0, mask);
+    printf("TCAL input donw\n");
     return;
   }
 
   tcal9539_regRMW(pin->i2cAddr, pin->dirAddr, mask, mask);
   tcal9539_regRMW(pin->i2cAddr, pin->pullDirAddr, pin->pullUp << pin->index, mask);
   tcal9539_regRMW(pin->i2cAddr, pin->pullEnAddr, pin->pullEn << pin->index, mask);
-
+  printf("Starting i2c outputs 1/2\n");
   uint8_t data = ulMode & TCAL_INT_ENABLE ? 0 : mask;
   Serial.printf("0x%04x:0x%04x, int data 0x%08x & 0x%08x\n", ulPin, ulMode, data, mask);
   tcal9539_regRMW(pin->i2cAddr, pin->interruptMaskAddr, data, mask);
 
   data = ulMode & TCAL_INVERT ? mask : 0;
-  tcal9539_regRMW(pin->i2cAddr, pin->invertPol, data, mask);
+  tcal9539_regRMW(pin->i2cAddr, pin->polarityInvAddr, data, mask);
 
   data = ulMode & TCAL_INPUT_LATCH ? mask : 0;
   tcal9539_regRMW(pin->i2cAddr, pin->inputLatchAddr, data, mask);
