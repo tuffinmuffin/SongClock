@@ -7,8 +7,15 @@
 #include "sdios.h"
 #include "Mp3Player.h"
 
+//Audio Libs
 #include "tcal9539.h"
+
+//Stepper Lib
 #include "clockHand.h"
+
+//Time Libs
+#include <PCF2131_I2C.h>
+#include <time.h>
 
 /*
  *  Play an MP3 file from an SD card
@@ -59,6 +66,9 @@ static const int STP_EN_N       = 1;
 
 ClockHand* hourHand;
 ClockHand* minuteHand;
+PCF2131_I2C rtc;
+
+
 /**
  * \brief Put the system to sleep waiting for interrupt
  *
@@ -73,6 +83,10 @@ static inline void system_sleep(void)
 	__WFI();
 }
 
+bool rtc_int_flag0;
+void rtc_int_callback0() {
+  rtc_int_flag0 = true;
+}
 
 //------------------------------------------------------------------------------
 // Store error strings in flash to save RAM.
@@ -138,6 +152,128 @@ void setupGpio() {
   pinMode(STP_EN_N, OUTPUT);
 }
 
+void set_time(struct tm now_tm) {
+  /*  !!!! "strptime()" is not available in Arduino's "time.h" !!!!
+  const char* current_time  = "2023-4-7 05:25:30";
+  const char* format  = "%Y-%m-%d %H:%M:%S";
+  struct tm	tmv;
+  strptime( current_time, format, &tmv );
+  */
+
+  now_tm.tm_year = 2024 - 1900;
+  now_tm.tm_mon = 12 - 1;  // 0 - jan 11 dec
+  now_tm.tm_mday = 10;
+  now_tm.tm_hour = 19;
+  now_tm.tm_min = 46;
+  now_tm.tm_sec = 0;
+
+  rtc.set(&now_tm);
+}
+
+void int_cause_monitor(uint8_t* status) {
+  Serial.print("status:");
+
+  for (int i = 0; i < 3; i++) {
+    Serial.print(" ");
+    Serial.print(status[i], HEX);
+  }
+  Serial.print(", ");
+
+  if (status[0] & 0x80) {
+    Serial.print("INT:every min/sec, ");
+
+    time_t current_time = rtc.time(NULL);
+    Serial.print("time:");
+    Serial.print(current_time);
+    Serial.print(" ");
+    Serial.println(ctime(&current_time));
+  }
+  if (status[0] & 0x40) {
+    Serial.print("INT:watchdog");
+  }
+  if (status[0] & 0x10) {
+    Serial.print("INT:alarm ");
+    Serial.println("########## ALARM ########## ");
+  }
+  if (status[1] & 0x08) {
+    Serial.print("INT:battery switch over");
+  }
+  if (status[1] & 0x04) {
+    Serial.print("INT:battery low");
+  }
+  if (status[2] & 0xF0) {
+    for (int i = 0; i < 4; i++) {
+      if (status[2] & (0x80 >> i)) {
+        Serial.print("INT:timestamp");
+        Serial.print(i + 1);
+        Serial.println("");
+      }
+    }
+    for (int i = 0; i < 4; i++) {
+      Serial.print("  TIMESTAMP");
+      Serial.print(i + 1);
+      Serial.print(": ");
+      time_t ts = rtc.timestamp(i + 1);
+      Serial.println(ctime(&ts));
+    }
+  }
+}
+
+void setupRtc() {
+    //setup RTC
+  rtc.begin();
+  struct tm now;
+  //set_time(now);
+  delay(10);
+
+  rtc.alarm_disable();
+  rtc.int_clear();
+  rtc.periodic_interrupt_enable(PCF2131_base::periodic_int_select::DISABLE, 1);
+  //rtc.periodic_interrupt_enable(PCF2131_base::periodic_int_select::EVERY_MINUTE, 1);
+
+  //enable battery switch over - set PWRMNG = 0 . Default 0b111
+    rtc.reg_w(3, rtc.reg_r(3) & ~0xE0);
+
+
+  //Enable Minute interrupt
+  rtc.reg_w(0, rtc.reg_r(0) | 0x2);
+
+
+  for(int i = 0; i < 0x4; i++) {
+    Serial.printf("0x%02x: 0x%02x -\n", i, rtc.reg_r(i));
+  }
+
+  bool led = false;
+
+  while(0) {
+    digitalWrite(13, led);
+    led = !led;
+    //delay(1000);
+    uint8_t status[3];
+    rtc.int_clear(status);
+    //int_cause_monitor(status);
+    if (status[0] & 0x80)
+    {
+      Serial.print("INT:every min/sec, ");
+
+      time_t current_time = rtc.time(NULL);
+      Serial.print("time:");
+      Serial.print(current_time);
+      Serial.print(" ");
+      Serial.println(ctime(&current_time));
+    }
+    delay(500);
+    //system_sleep()
+    //USBDevice.detach();
+    //int sleepMS = Watchdog.sleep();
+    //USBDevice.attach();
+    //delay(2000);
+    //Serial.printf("Slept for sleepMs %d\n", sleepMS);
+    //delay(100);
+  }
+
+}
+
 uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr);
 
 // the setup routine runs once when you press reset:
@@ -147,7 +283,15 @@ void setup() {
 
   pinMode(13, OUTPUT);
   Serial.begin(115200);
-  //while(!Serial);
+  int loop_cnt = 0;
+  while(!Serial) {
+    if(loop_cnt > 20) {
+      break;
+    }
+    loop_cnt++;
+    delay(100);
+
+  }
   Serial.println("GPIO init\n");
 
   setupGpio();
@@ -161,17 +305,27 @@ void setup() {
 
   Serial.println("GPIO Done\n");
 
+  setupRtc();
+
   minuteHand = new ClockHand(STP_A1, STP_A2_A3, STP_A2_A3, STP_A4, MINUTE_HALL, 274, 5);
   hourHand = new ClockHand(STP_B4, STP_B2_B3, STP_B2_B3, STP_B1, HOUR_HALL, 94, 3);
   //minuteHand->setHandMinute(30);
   //delay(2000);
-  minuteHand->setStepDelay(10);
+  minuteHand->setStepDelay(15);
   //hourHand->setHandMinute(30);
-  hourHand->setStepDelay(10);  
+  hourHand->setStepDelay(15);
+  //set inital time
+  time_t current_time = rtc.time(NULL);
+  struct tm curr_tm;
+  gmtime_r(&current_time, &curr_tm);
+  minuteHand->setHandMinute(curr_tm.tm_min);
+  hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);
+
   hourHand->calibrate();
+  minuteHand->calibrate();
 
   Serial.println("Steppers Created");
-  
+
   pinMode(13, OUTPUT);
   int led = 0;
   int nextTimeL = millis()+1000;
@@ -184,6 +338,8 @@ void setup() {
     hourHand->periodic();
     minuteHand->periodic();
   }
+
+
 
   mp3.Init(14, 5);
   /*
@@ -213,6 +369,18 @@ void setup() {
 
     cidDmp();
     */
+
+  while(0) {
+    time_t current_time = 0;
+
+    current_time = rtc.time(NULL);
+    Serial.print("time : ");
+    Serial.print(current_time);
+    Serial.print(", ");
+    Serial.println(ctime(&current_time));
+
+    delay(1000);
+  }
 }
 
 float getBatteryVoltage() {
@@ -227,7 +395,7 @@ bool idleLogged = false;
 bool workLogged = false;
 void loop() {
     bool work = hourHand->periodic();
-    work |= minuteHand->periodic();    
+    work |= minuteHand->periodic();
 
     //only run if no work
     if(!work) {
@@ -238,6 +406,7 @@ void loop() {
         digitalWrite(STP_EN_N, 1);
         digitalWrite(VCC_HALL, 0);
       }
+      /*
       if(nextTime < millis()) {
         digitalWrite(STP_EN_N, 0);
         digitalWrite(VCC_HALL, 1);
@@ -250,7 +419,27 @@ void loop() {
         idleLogged = false;
         workLogged = false;
         Serial.printf("Timing %d: min %d hour %d\n", i, i % 60, (i/60) % 12);
+      }*/
+      uint8_t status[3];
+      rtc.int_clear(status);
+      //int_cause_monitor(status);
+      if (status[0] & 0x80)
+      {
+        Serial.print("INT:every min/sec, ");
+
+        time_t current_time = rtc.time(NULL);
+        Serial.print("time:");
+        Serial.print(current_time);
+        Serial.print(" ");
+        Serial.println(ctime(&current_time));
+        digitalWrite(STP_EN_N, 0);
+        digitalWrite(VCC_HALL, 1);
+        struct tm curr_tm;
+        gmtime_r(&current_time, &curr_tm);
+        minuteHand->setHandMinute(curr_tm.tm_min);
+        hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);
       }
+
     } else {
 
     }

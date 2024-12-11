@@ -32,9 +32,15 @@ void tcalInt() {
   //in case we get an interrupt while doing i2c transaction we don't operate here.
   //
   intTriggered = true;
-  Serial.println("Interrupt");
+  Serial.printf("Interrupt %d\n", millis());
 }
 
+void tcal_periodic() {
+  if(intTriggered) {
+    intTriggered = false;
+
+  }
+}
 
 bool initTcal9539(uint8_t addr, int32_t intPin) {
     if(tcal9539_count == MAX_TCAL_DEVICES) {
