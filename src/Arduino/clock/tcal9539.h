@@ -96,7 +96,7 @@ bool tcal9539_init(uint8_t addr);
  }
 #endif
 
-typedef void (*gpioCallback) (void* data);
+typedef void (*gpioCallback) (void* data, bool state);
 
 struct tcal_pin {
     uint8_t i2cAddr;
@@ -115,14 +115,15 @@ struct tcal_pin {
     bool pullEn;
     bool pullUp;
     bool interruptEn;
-    uint32_t assertTime;
+    uint64_t assertTime;
     bool assertFalse;
-    uint32_t minAssertTimeUs;
-    uint32_t minAssertHeldUs;
+    uint32_t minAssertTimeMs;
+    uint32_t minAssertHeldMs;
     int8_t pullStr;
     bool invertPol;
     void* callbackPressedData;
     void* callbackHeldData;
+    bool pressedCalled;
     gpioCallback callbackPressed;
     gpioCallback callbackHeld;
 };
@@ -130,12 +131,13 @@ struct tcal_pin {
 
 //i2c address, intPin to use for interrupts else -1 to disable
 bool initTcal9539(uint8_t addr, int32_t intPin);
+void tcal9539_reset(uint8_t addr);
 //call in main loop to handle servicing interrupts and other periodic tasks like button HELD callbacks
-void tcal_periodic();
+bool tcal_periodic();
 
 struct tcal_pin* getTcalData(uint32_t pin);
-void registerCallbackPressed(uint32_t pin, gpioCallback callbackPressed, void* data, uint32_t minTimeUs);
-void registerCallbackHeld(uint32_t pin, gpioCallback callbackHeld, void* data, uint32_t minTimeUs);
+void registerCallbackPressed(uint32_t pin, gpioCallback callbackPressed, void* data, uint32_t minTimeMs);
+void registerCallbackHeld(uint32_t pin, gpioCallback callbackHeld, void* data, uint32_t minTimeMs);
 
 void enableInterrupt(uint32_t pin);
 void disableInterrupt(uint32_t pin);

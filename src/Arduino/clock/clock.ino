@@ -6,7 +6,7 @@
 #include "FreeStack.h"
 #include "sdios.h"
 #include "Mp3Player.h"
-
+#include "millis64.h"
 //Audio Libs
 #include "tcal9539.h"
 
@@ -41,6 +41,7 @@ static const int E_BUSY       = E4;
 static const int RTC_ALARM    = E5;
 static const int MINUTE_HALL  = E6;
 static const int HOUR_HALL    = E7;
+static const int SPARE_INPUT  = E16;
 
 static const int E_CS         = E10;
 static const int E_DC         = E11;
@@ -111,7 +112,44 @@ void cidDmp() {
   cout << endl;
 }
 
+
+//UI callbacks
+void userSelPressed(void* data, bool state) {
+  Serial.printf("userSelPressed %d\n", state);
+}
+
+void userSelHeld(void* data, bool state) {
+  Serial.printf("userSelHeld %d\n", state);
+}
+
+void userUpPressed(void* data, bool state) {
+  Serial.printf("userUpPressed %d\n", state);
+}
+
+void userUpHeld(void* data, bool state) {
+  Serial.printf("userUpHeld %d\n", state);
+}
+
+void userDownPressed(void* data, bool state) {
+  Serial.printf("userDownPressed %d\n", state);
+}
+
+void userDownHeld(void* data, bool state) {
+  Serial.printf("userDownHeld %d\n", state);
+}
+
+void userRstPressed(void* data, bool state) {
+  Serial.printf("userRstPressed %d\n", state);
+}
+
+void userRstHeld(void* data, bool state) {
+  Serial.printf("userRstHeld %d\n", state);
+  NVIC_SystemReset();
+}
+
 void setupGpio() {
+  //reset the device(s)
+  tcal9539_reset(0);
 
   //internal inputs
   pinMode(GPIO_INT, INPUT);
@@ -124,9 +162,11 @@ void setupGpio() {
   pinMode(USER_DOWN, INPUT_PULLDOWN | TCAL_INT_ENABLE);
   pinMode(USER_POWER, INPUT_PULLDOWN | TCAL_INT_ENABLE);
   pinMode(E_BUSY, INPUT);
-  pinMode(RTC_ALARM, INPUT_PULLUP | TCAL_INT_ENABLE);
+  pinMode(RTC_ALARM, INPUT_PULLUP | TCAL_INT_ENABLE | TCAL_INVERT);
   pinMode(MINUTE_HALL, INPUT | TCAL_INVERT);
   pinMode(HOUR_HALL, INPUT | TCAL_INVERT);
+  pinMode(SPARE_INPUT, INPUT_PULLDOWN);
+  pinMode(E15, INPUT_PULLDOWN); //Unused pull down no float
   //TODO setup interrupts
 
   //external inputs
@@ -150,6 +190,18 @@ void setupGpio() {
   pinMode(STP_B2_B3, OUTPUT);
   pinMode(STP_B4, OUTPUT);
   pinMode(STP_EN_N, OUTPUT);
+
+
+  //setup input buttons
+  registerCallbackPressed(USER_SEL, userSelPressed, nullptr, 10);
+  registerCallbackHeld(USER_SEL, userSelHeld, nullptr, 1000);
+  registerCallbackPressed(USER_UP, userUpPressed, nullptr, 10);
+  registerCallbackHeld(USER_UP, userUpHeld, nullptr, 1000);
+  registerCallbackPressed(USER_DOWN, userDownPressed, nullptr, 10);
+  registerCallbackHeld(USER_DOWN, userDownHeld, nullptr, 1000);
+  registerCallbackPressed(USER_POWER, userRstPressed, nullptr, 1000);
+  registerCallbackHeld(USER_POWER, userRstHeld, nullptr, 5000);
+
 }
 
 void set_time(struct tm now_tm) {
@@ -163,8 +215,8 @@ void set_time(struct tm now_tm) {
   now_tm.tm_year = 2024 - 1900;
   now_tm.tm_mon = 12 - 1;  // 0 - jan 11 dec
   now_tm.tm_mday = 10;
-  now_tm.tm_hour = 19;
-  now_tm.tm_min = 46;
+  now_tm.tm_hour = 23;
+  now_tm.tm_min = 28;
   now_tm.tm_sec = 0;
 
   rtc.set(&now_tm);
@@ -232,7 +284,7 @@ void setupRtc() {
   //rtc.periodic_interrupt_enable(PCF2131_base::periodic_int_select::EVERY_MINUTE, 1);
 
   //enable battery switch over - set PWRMNG = 0 . Default 0b111
-    rtc.reg_w(3, rtc.reg_r(3) & ~0xE0);
+  rtc.reg_w(2, rtc.reg_r(2) & ~0xE0);
 
 
   //Enable Minute interrupt
@@ -242,6 +294,7 @@ void setupRtc() {
   for(int i = 0; i < 0x4; i++) {
     Serial.printf("0x%02x: 0x%02x -\n", i, rtc.reg_r(i));
   }
+
 
   bool led = false;
 
@@ -279,7 +332,7 @@ uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr);
 // the setup routine runs once when you press reset:
 void setup() {
   Wire.begin();
-  Wire.setTimeout(10);
+  Wire.setClock(20000);
 
   pinMode(13, OUTPUT);
   Serial.begin(115200);
@@ -293,7 +346,6 @@ void setup() {
 
   }
   Serial.println("GPIO init\n");
-
   setupGpio();
 
   digitalWrite(ENABLE_VCC, 1);
@@ -341,26 +393,8 @@ void setup() {
 
 
 
-  mp3.Init(14, 5);
-  /*
-  while(1) {
-    digitalWrite(13, led);
-    led = !led;
+  //mp3.Init(14, 5);
 
-    //Serial.printf("0x%02x:0x%02x:0x%02x\n",  (uint32_t)tcal9539_reg8Read(0x74, 0x4A), (uint32_t)tcal9539_reg8Read(0x74, 0x4C), (uint32_t)tcal9539_reg8Read(0x74, 0));
-    //Serial.printf("%d\n", tcal9539_reg8Read(0x74, 0));
-    bool intStat = digitalRead(GPIO_INT);
-    Serial.printf("%d %d %d %d int %d\n", digitalRead(USER_SEL), digitalRead(USER_UP), digitalRead(USER_DOWN), digitalRead(USER_POWER), intStat);
-    //int sleepMS = Watchdog.sleep();
-    int sleepMS = 0;
-    //USBDevice.attach();
-    //while (!Serial)
-    //  delay(10);
-    Serial.printf("Slept for %d\n", sleepMS);
-    delay(1000);
-    break;
-  }
-  */
   //mp3.Play("test.mp3", false);
   /*while (!sd.begin(SD_CS, 12000000/2)) {
       Serial.println("Card failed, or not present");
@@ -370,17 +404,6 @@ void setup() {
     cidDmp();
     */
 
-  while(0) {
-    time_t current_time = 0;
-
-    current_time = rtc.time(NULL);
-    Serial.print("time : ");
-    Serial.print(current_time);
-    Serial.print(", ");
-    Serial.println(ctime(&current_time));
-
-    delay(1000);
-  }
 }
 
 float getBatteryVoltage() {
@@ -396,6 +419,8 @@ bool workLogged = false;
 void loop() {
     bool work = hourHand->periodic();
     work |= minuteHand->periodic();
+    work |= tcal_periodic();
+    //delay(100);
 
     //only run if no work
     if(!work) {

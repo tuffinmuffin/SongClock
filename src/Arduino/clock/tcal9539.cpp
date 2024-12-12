@@ -1,5 +1,6 @@
 #include "tcal9539.h"
 #include <Wire.h>
+#include "millis64.h"
 
 //global data structure
 int8_t tcal9539_count = 0;
@@ -35,12 +36,6 @@ void tcalInt() {
   Serial.printf("Interrupt %d\n", millis());
 }
 
-void tcal_periodic() {
-  if(intTriggered) {
-    intTriggered = false;
-
-  }
-}
 
 bool initTcal9539(uint8_t addr, int32_t intPin) {
     if(tcal9539_count == MAX_TCAL_DEVICES) {
@@ -87,9 +82,11 @@ void tcal9539_reg8Write(uint8_t device, uint8_t addr, uint8_t val) {
 }
 
 uint16_t tcal9539_reg16Read(uint8_t device, uint8_t addr) {
+    while(Wire.available()) { Wire.read();}
     Wire.beginTransmission(device);
     Wire.write(addr);
-    Wire.endTransmission();
+    int status = Wire.endTransmission();  
+
     Wire.requestFrom(device, 2);
     while(Wire.available()< 2) {;}
     uint16_t val = Wire.read();
@@ -108,6 +105,15 @@ void tcal9539_reg16Write(uint8_t device, uint8_t addr, uint16_t val) {
     return;
 }
 
+void tcal9539_reset(uint8_t addr) {
+  Serial.printf("Resetting 0x%02x\n", addr);
+  Wire.beginTransmission(0);
+  delay(10);
+  Wire.write(0x6);
+  delay(10);
+  Wire.endTransmission(true);  
+  delay(10);  
+}
 
 uint8_t tcal9539_regRMW(uint8_t device, uint8_t addr, uint8_t val, uint8_t mask) {
     uint8_t data = tcal9539_reg8Read(device, addr);
@@ -128,7 +134,7 @@ void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
     if(pin->i2cAddr == 0) {
 
       pin->i2cAddr = getTcal9539Addr(ulPin);
-      Serial.printf("addr is now %02x\n", pin->i2cAddr);
+      //Serial.printf("addr is now %02x\n", pin->i2cAddr);
       //init structure for first call
       if((ulPin & 0xFF) < 10) {
         pin->index = ulPin & 0x7;
@@ -158,8 +164,8 @@ void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
         //TODO Add drive strength
         //TODO add open drain
       }
-      pin->minAssertTimeUs = 0;
-      pin->minAssertHeldUs = 500000;
+      pin->minAssertTimeMs = 0;
+      pin->minAssertHeldMs = 500000;
     }
 
   switch ( ulMode & 0xF )
@@ -249,3 +255,91 @@ int tcal9539_isOwned(uint32_t ulPin) {
   return (ulPin & TCAL_MASK) != 0; 
 }
 
+
+void registerCallbackPressed(uint32_t pin, gpioCallback callbackPressed, void* cbData, uint32_t minTimeMs) {
+  struct tcal_pin* data = getTcal9539Chan(pin);
+  if(nullptr == data) {
+    Serial.printf("Failed to set callback for 0x04x\n", pin);
+    return;
+  }
+  data->minAssertTimeMs = minTimeMs;
+  data->callbackPressedData = cbData;
+  data->callbackPressed = callbackPressed;
+  data->assertTime = 0;
+  data->pressedCalled = false;
+}
+
+void registerCallbackHeld(uint32_t pin, gpioCallback callbackHeld, void* cbData, uint32_t minTimeMs) {
+  struct tcal_pin* data = getTcal9539Chan(pin);
+  if(nullptr == data) {
+    Serial.printf("Failed to set callback for 0x04x\n", pin);
+    return;
+  }
+
+  data->minAssertHeldMs = minTimeMs;
+  data->callbackHeldData = cbData;
+  data->callbackHeld = callbackHeld;
+  data->assertTime = 0;
+}
+
+
+bool tcal_periodic() {
+  //if int triggered we want to say we processed data.
+  bool registeredAsserted = intTriggered;
+  intTriggered = false;
+  uint64_t now = millis64();
+  //read GPIO and direction registers. Only check inputs
+  uint16_t gpio = tcal9539_reg16Read(getTcal9539Addr(E0), TCAL9539_INPUT0);
+  gpio &= tcal9539_reg16Read(getTcal9539Addr(E0), TCAL9539_CONFIG0);
+  //Serial.printf("gpio %04x\n", gpio);
+  //return 0;
+
+  for(int i = 0; i < 16; i++) {
+    bool assert = (gpio >> i) & 0x1;
+    struct tcal_pin* data = getTcal9539Chan(i);
+    //handle logic if asserted
+    if(assert) {
+      //Serial.printf("%i: %d\n", i, assert);
+      //if asserted start timing
+      if (data->assertTime == 0) {
+        data->assertTime = now;
+      }
+      /*if(i < 4) {
+        Serial.printf("%i: %p - press %d: now %ld delta %ld, min %d\n", i, data->callbackPressed, data->pressedCalled, now, now-data->assertTime, data->minAssertTimeMs);
+      }*/
+      //check ifpressed long enough and not pressed before
+      if(data->callbackPressed && !data->pressedCalled && (now - data->assertTime) > data->minAssertTimeMs) {
+        data->callbackPressed(data->callbackPressedData, assert);
+        data->pressedCalled = true;
+        Serial.printf("%d pressed\n");
+      }
+      //if help call callback again
+      if(data->callbackHeld && (now - data->assertTime) > data->minAssertHeldMs) {
+        data->callbackHeld(data->callbackHeldData, assert);
+      }
+      //if gpio is assert and callback is registered, we are active
+      if(data->callbackHeld || data->callbackPressed) {
+        registeredAsserted = true;
+      }
+    }
+    //handle false logic
+    else {
+      if(data->assertTime == 0) {
+        //already was off continue
+        continue;
+      }
+      //newley off
+      
+      //if held, and now off, callback with 0 value to say not held
+      if(data->callbackHeld && (now - data->assertTime) > data->minAssertHeldMs) {
+        data->callbackHeld(data->callbackHeldData, assert);
+      }
+
+      //reset time and called status
+      data->assertTime = 0;
+      data->pressedCalled = 0;
+    }
+  }
+
+  return registeredAsserted;
+}
