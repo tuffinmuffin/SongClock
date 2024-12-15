@@ -14,8 +14,51 @@
 #include "clockHand.h"
 
 //Time Libs
-#include <PCF2131_I2C.h>
+#include "PCF2131_I2C.h"
 #include <time.h>
+
+//LED lib
+#include <SPI.h>
+#include <Adafruit_DotStar.h>
+
+// Here's how to control the LEDs from any two pins:
+#define DATAPIN    4
+#define CLOCKPIN   5
+Adafruit_DotStar led(1, 8, 6, DOTSTAR_BRG);
+
+void showLed(int r, int g, int b, int bright = 255);
+void showRed(uint8_t bright = 255);
+void showGreen(uint8_t bright = 255);
+void showBlue(uint8_t bright = 255);
+void showPurple(uint8_t bright = 255);
+void showYellow(uint8_t bright = 255);
+void showWhite(uint8_t bright = 255);
+void showMagenta(uint8_t bright = 255);
+void showCyan(uint8_t bright = 255);
+void showOff();
+
+bool enColor = false;
+void showLed(int r, int g, int b, int bright) {
+  if(!enColor) {
+    return;
+  } 
+  led.setPixelColor(0, r, g, b);
+  led.setBrightness(bright/4);
+  led.show();
+  //delay(10);
+}
+
+
+void showRed(uint8_t bright) { showLed(255,0,0,bright);}
+void showGreen(uint8_t bright) { showLed(0,255,0,bright);}
+void showBlue(uint8_t bright) { showLed(0,0,255,bright);}
+void showPurple(uint8_t bright) { showLed(128,0,128,bright);}
+void showYellow(uint8_t bright) { showLed(255,255,0,bright);}
+void showWhite(uint8_t bright) { showLed(255,0,0,bright);}
+void showMagenta(uint8_t bright) { showLed(255,0,255,bright);}
+void showCyan(uint8_t bright) { showLed(0,255,255,bright);}
+
+void showOff() { led.clear(); }
 
 /*
  *  Play an MP3 file from an SD card
@@ -28,9 +71,10 @@ const char* files[] = {
 
 
 ArduinoOutStream cout(Serial);
-
+;
 SdFs sd;
 FsFile file;
+FsFile folder;
 
 //GPIO
 static const int USER_SEL     = E0;
@@ -87,6 +131,21 @@ static inline void system_sleep(void)
 bool rtc_int_flag0;
 void rtc_int_callback0() {
   rtc_int_flag0 = true;
+}
+
+bool openFileN(const char* path, int count) {
+  if(!folder.open(path)) {
+    Serial.printf("failed to open %s File %d\n", path, count);
+    return false;
+  }
+  for(int i = 0; i < count; i++) {
+    file.openNext(&folder);
+  }
+  if(!file.isOpen()) {
+    Serial.printf("Failed to open %s File %d - not found\n", path, count);
+    return true;
+  }
+  return true;
 }
 
 //------------------------------------------------------------------------------
@@ -214,61 +273,12 @@ void set_time(struct tm now_tm) {
 
   now_tm.tm_year = 2024 - 1900;
   now_tm.tm_mon = 12 - 1;  // 0 - jan 11 dec
-  now_tm.tm_mday = 10;
-  now_tm.tm_hour = 23;
-  now_tm.tm_min = 28;
+  now_tm.tm_mday = 15;
+  now_tm.tm_hour = 0;
+  now_tm.tm_min = 49;
   now_tm.tm_sec = 0;
 
   rtc.set(&now_tm);
-}
-
-void int_cause_monitor(uint8_t* status) {
-  Serial.print("status:");
-
-  for (int i = 0; i < 3; i++) {
-    Serial.print(" ");
-    Serial.print(status[i], HEX);
-  }
-  Serial.print(", ");
-
-  if (status[0] & 0x80) {
-    Serial.print("INT:every min/sec, ");
-
-    time_t current_time = rtc.time(NULL);
-    Serial.print("time:");
-    Serial.print(current_time);
-    Serial.print(" ");
-    Serial.println(ctime(&current_time));
-  }
-  if (status[0] & 0x40) {
-    Serial.print("INT:watchdog");
-  }
-  if (status[0] & 0x10) {
-    Serial.print("INT:alarm ");
-    Serial.println("########## ALARM ########## ");
-  }
-  if (status[1] & 0x08) {
-    Serial.print("INT:battery switch over");
-  }
-  if (status[1] & 0x04) {
-    Serial.print("INT:battery low");
-  }
-  if (status[2] & 0xF0) {
-    for (int i = 0; i < 4; i++) {
-      if (status[2] & (0x80 >> i)) {
-        Serial.print("INT:timestamp");
-        Serial.print(i + 1);
-        Serial.println("");
-      }
-    }
-    for (int i = 0; i < 4; i++) {
-      Serial.print("  TIMESTAMP");
-      Serial.print(i + 1);
-      Serial.print(": ");
-      time_t ts = rtc.timestamp(i + 1);
-      Serial.println(ctime(&ts));
-    }
-  }
 }
 
 void setupRtc() {
@@ -291,7 +301,7 @@ void setupRtc() {
   rtc.reg_w(0, rtc.reg_r(0) | 0x2);
 
 
-  for(int i = 0; i < 0x4; i++) {
+  for(int i = 0; i < 0x16; i++) {
     Serial.printf("0x%02x: 0x%02x -\n", i, rtc.reg_r(i));
   }
 
@@ -329,10 +339,15 @@ void setupRtc() {
 
 uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr);
 
+int songCount[12] = {};
+int currSong[12] = {};
+
 // the setup routine runs once when you press reset:
 void setup() {
+  led.begin();
   Wire.begin();
-  Wire.setClock(20000);
+  Wire.setClock(50000);
+  showLed(255,0,0, 128);
 
   pinMode(13, OUTPUT);
   Serial.begin(115200);
@@ -345,15 +360,19 @@ void setup() {
     delay(100);
 
   }
+
   Serial.println("GPIO init\n");
   setupGpio();
+
+  showLed(0,0,255, 128);
 
   digitalWrite(ENABLE_VCC, 1);
   digitalWrite(E_ENABLE, 1);
   digitalWrite(VCC_HALL, 1);
   digitalWrite(STP_EN_N, 1);
-  delay(1000);
+  
   digitalWrite(STP_EN_N, 0);
+  delay(100);
 
   Serial.println("GPIO Done\n");
 
@@ -370,6 +389,7 @@ void setup() {
   time_t current_time = rtc.time(NULL);
   struct tm curr_tm;
   gmtime_r(&current_time, &curr_tm);
+  Serial.println(ctime(&current_time));
   minuteHand->setHandMinute(curr_tm.tm_min);
   hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);
 
@@ -391,18 +411,67 @@ void setup() {
     minuteHand->periodic();
   }
 
-
-
-  //mp3.Init(14, 5);
+  //mp3.Init(AUDIO_EN, 5);
 
   //mp3.Play("test.mp3", false);
-  /*while (!sd.begin(SD_CS, 12000000/2)) {
+
+  while (!sd.begin(SD_CS, 12000000)) {
       Serial.println("Card failed, or not present");
       delay(10000);
+      break;
     }
 
     cidDmp();
-    */
+    
+    char path[100];
+    char name[100];
+    for(int i = 1; i < 13; i++) {
+      snprintf(path, 100, "/%d", i);
+      
+      if(!folder.open(path)) {
+        Serial.printf("Failed to open %s\n", path);
+        break;
+      }
+
+      while(file.openNext(&folder)) {
+        songCount[i-1]++;
+        file.getName(name, 100);
+        Serial.printf("%s/%s - %d\n", path, name, file.dataLength());
+        file.close();
+      }
+      folder.close();
+    }
+
+    for(int i = 1; i < 13; i++) {
+      Serial.printf("Time %d : %d songs\n", i-1, songCount[i-1]);
+    }
+
+    for(int i = 1; i < 13; i++) {
+      snprintf(path, 100, "/%d", i);
+      openFileN(path, songCount[i-1]);
+      file.getName(name, 100);
+      Serial.printf("%d:%d - %s\n", i, songCount[i-1], name);
+      file.close();
+    }
+
+  // Serial.printf("Starting MP3\n");
+  // if(!mp3.Playing()) {
+  //   Serial.printf("MP3 not playing\n");
+  //   if(openFileN("/1", 1)) {
+  //     cout << "Failed to open file" << endl;
+  //   }
+  //   file.getName(name, 100);
+  //   Serial.printf("file %s. Len %d\n", name, file.dataLength());
+  //   //file.open("/number/4.mp3");
+  //   mp3.Play(&file, false);
+  // } else {
+  //   Serial.printf("MP3 Playing??\n");
+  // }
+
+  // while(1) {
+  //   //break;
+  //   mp3.periodic();
+  // }
 
 }
 
@@ -417,9 +486,11 @@ int nextTime = millis()+1000;
 bool idleLogged = false;
 bool workLogged = false;
 void loop() {
-    bool work = hourHand->periodic();
-    work |= minuteHand->periodic();
-    work |= tcal_periodic();
+    bool workHour = hourHand->periodic();
+    bool workMinute = minuteHand->periodic();
+    bool workTcal =  tcal_periodic();
+
+    bool work = workHour || workMinute || workTcal;
     //delay(100);
 
     //only run if no work
@@ -430,21 +501,10 @@ void loop() {
         delay(50);
         digitalWrite(STP_EN_N, 1);
         digitalWrite(VCC_HALL, 0);
+        enColor = true;
+        showOff();
       }
-      /*
-      if(nextTime < millis()) {
-        digitalWrite(STP_EN_N, 0);
-        digitalWrite(VCC_HALL, 1);
-        delay(10);
-        Serial.printf("%d working. Battery  %1.02f\n", millis(), getBatteryVoltage());
-        nextTime = millis()+1000;
-        i++;
-        minuteHand->setHandMinute(i % 60);
-        hourHand->setHandHour(i % 60, (i/60) % 12);
-        idleLogged = false;
-        workLogged = false;
-        Serial.printf("Timing %d: min %d hour %d\n", i, i % 60, (i/60) % 12);
-      }*/
+
       uint8_t status[3];
       rtc.int_clear(status);
       //int_cause_monitor(status);
@@ -459,17 +519,26 @@ void loop() {
         Serial.println(ctime(&current_time));
         digitalWrite(STP_EN_N, 0);
         digitalWrite(VCC_HALL, 1);
+        //allow voltages to stablize
+        delay(100);
         struct tm curr_tm;
         gmtime_r(&current_time, &curr_tm);
         minuteHand->setHandMinute(curr_tm.tm_min);
         hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);
+
+        
       }
 
     } else {
-
+      idleLogged = false;
     }
 
-
+  if(hourHand->requestedCal() || minuteHand->requestedCal()) {
+    Serial.printf("cal requested hour %d min %d, time %d\n", hourHand->requestedCal(), minuteHand->requestedCal(), millis());
+    hourHand->calibrate();
+    minuteHand->calibrate();
+  }
+  //delay(2000);
   /*
   if(!mp3.Playing()) {
     Serial.printf("On index %d, %s\n", i, files[i]);

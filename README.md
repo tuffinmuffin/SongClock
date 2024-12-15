@@ -1,5 +1,5 @@
 # SongClock
-This is for a clock that will play audio on the hour. 
+This is for a clock that will play audio on the hour.
 The included art assets currently is focused on birds and will be refered to as bird block.
 See assets for art asset licnese
 
@@ -15,5 +15,9 @@ See assets for art asset licnese
     PCB design and BOM
  - src/arduino
     Arduino refernce code for Adafruit M4 itisty and PCB
-    
-    
+
+
+
+# External Libraries
+
+https://github.com/teddokano/RTC_NXP_Arduino.git

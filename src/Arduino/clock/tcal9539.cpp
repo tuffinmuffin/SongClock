@@ -2,6 +2,22 @@
 #include <Wire.h>
 #include "millis64.h"
 
+void showLed(int r, int g, int b, int bright = 255);
+void showRed(uint8_t bright = 255);
+void showGreen(uint8_t bright = 255);
+void showBlue(uint8_t bright = 255);
+void showPurple(uint8_t bright = 255);
+void showYellow(uint8_t bright = 255);
+void showWhite(uint8_t bright = 255);
+void showMagenta(uint8_t bright = 255);
+void showCyan(uint8_t bright = 255);
+void showOff();
+
+#ifndef DEBUG
+#define PRINTF(...)
+#else
+#define PRINTF(...) Serial.printf(...)
+#endif
 //global data structure
 int8_t tcal9539_count = 0;
 uint8_t tcal9539_addr_map[MAX_TCAL_DEVICES] = {TCAL_ADDR_LL};
@@ -60,37 +76,69 @@ bool initTcal9539(uint8_t addr, int32_t intPin) {
 
 uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr) {
     //flush
+    showRed();
+    PRINTF("tcal9539_reg8Read 0x%2x 0x%02x stared\n", device, addr);
     while(Wire.available()) { Wire.read();}
+    showBlue();
+    PRINTF("tcal9539_reg8Read 0x%2x 0x%02x begin\n", device, addr);
     Wire.beginTransmission(device);
+    PRINTF("tcal9539_reg8Read 0x%2x 0x%02x ws\n", device, addr);
     Wire.write(addr);
+    PRINTF("tcal9539_reg8Read 0x%2x 0x%02x we\n", device, addr);
     int status = Wire.endTransmission();
+    showYellow();
+    PRINTF("tcal9539_reg8Read 0x%2x 0x%02x et\n", device, addr);
     //Serial.printf("read8 %02x %02x %d\n", device, addr, status);
     Wire.requestFrom(device, 1);
+    PRINTF("tcal9539_reg8Read 0x%2x 0x%02x rf\n", device, addr);
     //TODO error handle while(Wire.available()< 1) {;}
     uint8_t val = Wire.read();
+    PRINTF("tcal9539_reg8Read 0x%2x 0x%02x rd\n", device, addr);
     //Serial.printf("%02x read: %02x %02x\n", device, addr, val);
+    showGreen();
     return val;
 }
 
 void tcal9539_reg8Write(uint8_t device, uint8_t addr, uint8_t val) {
+  showRed();
     //Serial.printf("%02x write: %02x %02x\n", device, addr, val);
+    PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d stared\n", device, addr, val);
     Wire.beginTransmission(device);
+    showYellow();
+    PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d br\n", device, addr, val);
     Wire.write(addr);
+    PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d wradd\n", device, addr, val);
     Wire.write(val);
+    PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d wr\n", device, addr, val);
     Wire.endTransmission();
+    PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d end\n", device, addr, val);
+    showGreen();
     return;
 }
 
 uint16_t tcal9539_reg16Read(uint8_t device, uint8_t addr) {
+  showRed();
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x started\n", device, addr);
     while(Wire.available()) { Wire.read();}
+    showYellow();
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x f\n", device, addr);
     Wire.beginTransmission(device);
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x br\n", device, addr);
     Wire.write(addr);
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x wr\n", device, addr);
     int status = Wire.endTransmission();  
+    showBlue();
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x et\n", device, addr);
 
     Wire.requestFrom(device, 2);
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x rf\n", device, addr);
     while(Wire.available()< 2) {;}
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x wait\n", device, addr);
     uint16_t val = Wire.read();
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x rd1\n", device, addr);
     val |= (uint16_t)Wire.read() << 8;
+    PRINTF("tcal9539_reg16Read 0x%2x 0x%02x done\n", device, addr);
+    showGreen();
     
 
     return val;

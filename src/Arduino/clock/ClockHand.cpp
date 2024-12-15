@@ -23,6 +23,7 @@ bool ClockHand::nextStepTime() {
 }
 
 void ClockHand::calibrate() {
+  requestCal_ = false;
   calibrated_ = false;
   calibrating_ = true; 
   calibrationStarted_ = false;
@@ -78,11 +79,11 @@ bool ClockHand::periodic() {
       if(senState) {
         if(stepPos_ < (calibrationOnLoc_ - sensorTol_)) {
           Serial.printf("Sensor Triggered Early at %d. Expected Range %d\n", stepPos_, (calibrationOnLoc_ - sensorTol_));
-          calibrate();
+          requestCal();
         }
         else if (stepPos_ > (calibrationOnLoc_ + sensorTol_)) {
           Serial.printf("Sensor Triggered Late at %d. Expected Range %d\n", stepPos_, (calibrationOffLoc_ + sensorTol_));
-          calibrate();
+          requestCal();
         } 
         else
         {
@@ -94,7 +95,7 @@ bool ClockHand::periodic() {
       if ( stepPos_ > (calibrationOffLoc_ + sensorTol_)) {
         if ( digitalRead(sensor_)) {
           Serial.printf("Sensor is on while past postion stalled?\n");
-          calibrate();
+          requestCal();
         }
         else {
           searchingForLoc_ = true;

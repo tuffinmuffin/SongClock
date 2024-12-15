@@ -18,6 +18,11 @@ class ClockHand {
     bool idle() {return stepPos_ == targetStepPos_ && !calibrating_ && !stepping_;}
     bool nextStepTime();
     void setDirection(bool counterClockWise);
+    bool requestedCal() {return requestCal_;}
+    void requestCal() {Serial.printf("Cal requested\n"); requestCal_ = true; }
+    //void getState()
+
+    //struct currState
 
     private:
     void uStep();
@@ -42,6 +47,7 @@ class ClockHand {
     int calibrationCenter_ = -1;
     int stepDelaySavedMs_ = -1;
     bool searchingForLoc_ = false;
+    bool requestCal_ = false;
 
     const uint8_t steps[6] = { 0x9, 0x1, 0x7, 0x6, 0xE, 0x8 };
 
