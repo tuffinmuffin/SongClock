@@ -9,6 +9,7 @@
 #include "millis64.h"
 //Audio Libs
 #include "tcal9539.h"
+#include "RTCZero.h"
 
 //Stepper Lib
 #include "clockHand.h"
@@ -112,7 +113,7 @@ static const int STP_EN_N       = 1;
 ClockHand* hourHand;
 ClockHand* minuteHand;
 PCF2131_I2C rtc;
-
+RTCZero rtcInternal;
 
 /**
  * \brief Put the system to sleep waiting for interrupt
@@ -128,10 +129,6 @@ static inline void system_sleep(void)
 	__WFI();
 }
 
-bool rtc_int_flag0;
-void rtc_int_callback0() {
-  rtc_int_flag0 = true;
-}
 
 bool openFileN(const char* path, int count) {
   if(!folder.open(path)) {
@@ -205,7 +202,7 @@ void userRstPressed(void* data, bool state) {
   Serial.printf("userRstPressed %d\n", state);
 }
 
-void rtcEvent(void* data, bool state) {
+void rtcPcaEvent(void* data, bool state) {
       Serial.printf("RTC Minute\n");
       uint8_t status[3];
       rtc.int_clear(status);
@@ -230,6 +227,37 @@ void rtcEvent(void* data, bool state) {
       }
 
       Watchdog.reset();
+}
+
+bool rtcInternalEventService = false;
+void rtcInternalEvent() {
+  rtcInternalEventService = true;
+}
+
+bool rtcPeriodic() {
+  if(!rtcInternalEventService) {
+    return false;
+  }
+  rtcInternalEventService = false;
+  int year = rtcInternal.getYear();
+  int month = rtcInternal.getMonth();
+  int day = rtcInternal.getDay();
+  int hour = rtcInternal.getHours();
+  int min = rtcInternal.getMinutes();
+  int sec = rtcInternal.getSeconds();
+
+  Serial.printf("RTC Alarm: 10/24/2224 %02d/%02d\%04d %02d:%02d:%02d\n", month, day, year, hour, min, sec);
+
+  digitalWrite(STP_EN_N, 0);
+  digitalWrite(VCC_HALL, 1);
+  //allow voltages to stablize
+  delay(50);
+
+  minuteHand->setHandMinute(min);
+  hourHand->setHandHour(sec, min);
+
+  return false;
+
 }
 
 void userRstHeld(void* data, bool state) {
@@ -293,11 +321,11 @@ void setupGpio() {
   registerCallbackPressed(USER_POWER, userRstPressed, nullptr, 1000);
   registerCallbackHeld(USER_POWER, userRstHeld, nullptr, 5000);
 
-  registerCallbackPressed(RTC_ALARM, rtcEvent, nullptr, 0);
+  registerCallbackPressed(RTC_ALARM, rtcPcaEvent, nullptr, 0);
 
 }
 
-void set_time(struct tm now_tm) {
+void set_timePca(struct tm now_tm) {
   /*  !!!! "strptime()" is not available in Arduino's "time.h" !!!!
   const char* current_time  = "2023-4-7 05:25:30";
   const char* format  = "%Y-%m-%d %H:%M:%S";
@@ -315,12 +343,12 @@ void set_time(struct tm now_tm) {
   rtc.set(&now_tm);
 }
 
-void setupRtc() {
+void setupRtcPca2131() {
 
     //setup RTC
   rtc.begin();
   struct tm now;
-  set_time(now);
+  set_timePca(now);
   delay(10);
 
   rtc.alarm_disable();
@@ -348,6 +376,39 @@ void setupRtc() {
   rtc.int_clear(status);
 
 }
+
+void setTimeInternal(struct tm* now_tm) {
+  struct tm local_tm;
+  if(now_tm == nullptr)  {
+    now_tm = &local_tm;
+    now_tm->tm_year = 2024 - 1900;
+    now_tm->tm_mon = 12 - 1;  // 0 - jan 11 dec
+    now_tm->tm_mday = 15;
+    now_tm->tm_hour = 23;
+    now_tm->tm_min = 12;
+    now_tm->tm_sec = 0;
+  }
+
+  rtcInternal.setDate(now_tm->tm_mday, now_tm->tm_mon - 1 , now_tm->tm_year - 100 );
+  rtcInternal.setTime(now_tm->tm_hour, now_tm->tm_min, now_tm->tm_sec);
+}
+
+
+
+void setupInternalRtc() {
+  rtcInternal.begin();
+
+  //set time
+  setTimeInternal(nullptr);
+
+  //setup alarm and register callback
+  rtcInternal.setAlarmSeconds(0);
+  rtcInternal.attachInterrupt(rtcInternalEvent);
+  rtcInternal.enableAlarm(rtcInternal.MATCH_SS);
+
+}
+
+
 static const uint32_t BRAM_VALID = 0xCAFE1234;
 
 union BRAM {
@@ -480,7 +541,8 @@ void setup() {
 
   Serial.println("GPIO Done\n");
 
-  setupRtc();
+  //setupRtcPca2131();
+  setupInternalRtc();
 
   minuteHand = new ClockHand(STP_A1, STP_A2_A3, STP_A2_A3, STP_A4, MINUTE_HALL, 274, 5);
   hourHand = new ClockHand(STP_B4, STP_B2_B3, STP_B2_B3, STP_B1, HOUR_HALL, 94, 3);
@@ -490,12 +552,20 @@ void setup() {
   //hourHand->setHandMinute(30);
   hourHand->setStepDelay(15);
   //set inital time
+  /*
   time_t current_time = rtc.time(NULL);
   struct tm curr_tm;
   gmtime_r(&current_time, &curr_tm);
   Serial.println(ctime(&current_time));
   minuteHand->setHandMinute(curr_tm.tm_min);
-  hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);
+  hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);*/
+
+  int minute = rtcInternal.getMinutes();
+  int hour = rtcInternal.getHours();
+  Serial.printf("Setting time to %02d:%02d\n", hour, minute);
+  minuteHand->setHandMinute(minute);
+  hourHand->setHandHour(hour, minute);
+
 
   hourHand->calibrate();
   minuteHand->calibrate();
