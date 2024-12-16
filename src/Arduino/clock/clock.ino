@@ -187,6 +187,10 @@ void userUpPressed(void* data, bool state) {
 
 void userUpHeld(void* data, bool state) {
   Serial.printf("userUpHeld %d\n", state);
+  while(1) {
+    Serial.printf("waiting on reset\n");
+    delay(10000);
+  }
 }
 
 void userDownPressed(void* data, bool state) {
@@ -201,8 +205,36 @@ void userRstPressed(void* data, bool state) {
   Serial.printf("userRstPressed %d\n", state);
 }
 
+void rtcEvent(void* data, bool state) {
+      Serial.printf("RTC Minute\n");
+      uint8_t status[3];
+      rtc.int_clear(status);
+      //int_cause_monitor(status);
+      if (status[0] & 0x80)
+      {
+        Serial.print("INT:every min/sec, ");
+
+        time_t current_time = rtc.time(NULL);
+        Serial.print("time:");
+        Serial.print(current_time);
+        Serial.print(" ");
+        Serial.println(ctime(&current_time));
+        digitalWrite(STP_EN_N, 0);
+        digitalWrite(VCC_HALL, 1);
+        //allow voltages to stablize
+        delay(50);
+        struct tm curr_tm;
+        gmtime_r(&current_time, &curr_tm);
+        minuteHand->setHandMinute(curr_tm.tm_min);
+        hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);
+      }
+
+      Watchdog.reset();
+}
+
 void userRstHeld(void* data, bool state) {
   Serial.printf("userRstHeld %d\n", state);
+  invalidateBram(false);
   NVIC_SystemReset();
 }
 
@@ -261,6 +293,8 @@ void setupGpio() {
   registerCallbackPressed(USER_POWER, userRstPressed, nullptr, 1000);
   registerCallbackHeld(USER_POWER, userRstHeld, nullptr, 5000);
 
+  registerCallbackPressed(RTC_ALARM, rtcEvent, nullptr, 0);
+
 }
 
 void set_time(struct tm now_tm) {
@@ -274,67 +308,76 @@ void set_time(struct tm now_tm) {
   now_tm.tm_year = 2024 - 1900;
   now_tm.tm_mon = 12 - 1;  // 0 - jan 11 dec
   now_tm.tm_mday = 15;
-  now_tm.tm_hour = 0;
-  now_tm.tm_min = 49;
+  now_tm.tm_hour = 23;
+  now_tm.tm_min = 12;
   now_tm.tm_sec = 0;
 
   rtc.set(&now_tm);
 }
 
 void setupRtc() {
+
     //setup RTC
   rtc.begin();
   struct tm now;
-  //set_time(now);
+  set_time(now);
   delay(10);
 
   rtc.alarm_disable();
   rtc.int_clear();
   rtc.periodic_interrupt_enable(PCF2131_base::periodic_int_select::DISABLE, 1);
-  //rtc.periodic_interrupt_enable(PCF2131_base::periodic_int_select::EVERY_MINUTE, 1);
+  //DO not use perdioc interrupt enable, it has a bug
 
   //enable battery switch over - set PWRMNG = 0 . Default 0b111
   rtc.reg_w(2, rtc.reg_r(2) & ~0xE0);
-
+  
 
   //Enable Minute interrupt
   rtc.reg_w(0, rtc.reg_r(0) | 0x2);
+
+  //set all interrupts 
+  rtc.reg_w(0x31, 0);
+  rtc.reg_w(0x32, 0);
 
 
   for(int i = 0; i < 0x16; i++) {
     Serial.printf("0x%02x: 0x%02x -\n", i, rtc.reg_r(i));
   }
 
+  uint8_t status[3];
+  rtc.int_clear(status);
 
-  bool led = false;
+}
+static const uint32_t BRAM_VALID = 0xCAFE1234;
 
-  while(0) {
-    digitalWrite(13, led);
-    led = !led;
-    //delay(1000);
-    uint8_t status[3];
-    rtc.int_clear(status);
-    //int_cause_monitor(status);
-    if (status[0] & 0x80)
-    {
-      Serial.print("INT:every min/sec, ");
+union BRAM {
+  //8KB
+  uint8_t buff[1024 * 8];
+  struct {
+    uint32_t key;
+    //TODO add data
+  } data;
+  uint32_t key;
+};
 
-      time_t current_time = rtc.time(NULL);
-      Serial.print("time:");
-      Serial.print(current_time);
-      Serial.print(" ");
-      Serial.println(ctime(&current_time));
-    }
-    delay(500);
-    //system_sleep()
-    //USBDevice.detach();
-    //int sleepMS = Watchdog.sleep();
-    //USBDevice.attach();
-    //delay(2000);
-    //Serial.printf("Slept for sleepMs %d\n", sleepMS);
-    //delay(100);
+BRAM* bram = (BRAM*) 0x47000000;
+static_assert(sizeof(BRAM) <= (1024*8), "BRAM must be < 8KB");
+void restoreBram() {
+  Serial.printf("BRAM key is 0x%08x; Valid key is 0x%08x\n", bram->key, BRAM_VALID);
+  if(bram->data.key == BRAM_VALID) {
+    Serial.printf("BRAM recovered\n");
+    return;
   }
+  memset(bram, 0, sizeof(BRAM));
+  bram->key = BRAM_VALID;
+  Serial.printf("BRAM has been inited\n");
+}
 
+void invalidateBram(bool clear) {
+  bram->key = 0;
+  if(clear) {
+    memset(bram, 0, sizeof(BRAM));
+  }
 }
 
 uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr);
@@ -342,8 +385,65 @@ uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr);
 int songCount[12] = {};
 int currSong[12] = {};
 
+void readSdInit() {
+    cidDmp();
+    
+    char path[100];
+    char name[100];
+    for(int i = 1; i < 13; i++) {
+      snprintf(path, 100, "/%d", i);
+      
+      if(!folder.open(path)) {
+        Serial.printf("Failed to open %s\n", path);
+        break;
+      }
+
+      while(file.openNext(&folder)) {
+        songCount[i-1]++;
+        // file.getName(name, 100);
+        // Serial.printf("%s/%s - %d\n", path, name, file.dataLength());
+        file.close();
+      }
+      folder.close();
+    }
+
+    for(int i = 1; i < 13; i++) {
+      Serial.printf("Time %d : %d songs\n", i-1, songCount[i-1]);
+    }
+
+    // for(int i = 1; i < 13; i++) {
+    //   snprintf(path, 100, "/%d", i);
+    //   openFileN(path, songCount[i-1]);
+    //   file.getName(name, 100);
+    //   Serial.printf("%d:%d - %s\n", i, songCount[i-1], name);
+    //   file.close();
+    // }
+
+  // Serial.printf("Starting MP3\n");
+  // if(!mp3.Playing()) {
+  //   Serial.printf("MP3 not playing\n");
+  //   if(openFileN("/1", 1)) {
+  //     cout << "Failed to open file" << endl;
+  //   }
+  //   file.getName(name, 100);
+  //   Serial.printf("file %s. Len %d\n", name, file.dataLength());
+  //   //file.open("/number/4.mp3");
+  //   mp3.Play(&file, false);
+  // } else {
+  //   Serial.printf("MP3 Playing??\n");
+  // }
+
+  // while(1) {
+  //    mp3.periodic();
+  //  }
+
+}
+
+
+
 // the setup routine runs once when you press reset:
 void setup() {
+  Watchdog.disable();
   led.begin();
   Wire.begin();
   Wire.setClock(50000);
@@ -361,8 +461,12 @@ void setup() {
 
   }
 
+  restoreBram();
+
   Serial.println("GPIO init\n");
   setupGpio();
+
+  Serial.printf("Reset Reason 0x%08x\n", Watchdog.resetCause());
 
   showLed(0,0,255, 128);
 
@@ -398,22 +502,9 @@ void setup() {
 
   Serial.println("Steppers Created");
 
-  pinMode(13, OUTPUT);
-  int led = 0;
-  int nextTimeL = millis()+1000;
-  while(0) {
-    if(nextTimeL < millis()) {
-      //Serial.printf("hour %d min %d millis %08d\n", digitalRead(HOUR_HALL), digitalRead(MINUTE_HALL), millis());
-      nextTimeL = millis() + 1000;
-    }
+  // mp3.Init(AUDIO_EN, 5);
 
-    hourHand->periodic();
-    minuteHand->periodic();
-  }
-
-  //mp3.Init(AUDIO_EN, 5);
-
-  //mp3.Play("test.mp3", false);
+  // //mp3.Play("test.mp3", false);
 
   while (!sd.begin(SD_CS, 12000000)) {
       Serial.println("Card failed, or not present");
@@ -421,57 +512,12 @@ void setup() {
       break;
     }
 
-    cidDmp();
-    
-    char path[100];
-    char name[100];
-    for(int i = 1; i < 13; i++) {
-      snprintf(path, 100, "/%d", i);
-      
-      if(!folder.open(path)) {
-        Serial.printf("Failed to open %s\n", path);
-        break;
-      }
+    readSdInit();
 
-      while(file.openNext(&folder)) {
-        songCount[i-1]++;
-        file.getName(name, 100);
-        Serial.printf("%s/%s - %d\n", path, name, file.dataLength());
-        file.close();
-      }
-      folder.close();
-    }
+  //watchdog every 65 seconds
+  //Watchdog.enable(1000*65);
 
-    for(int i = 1; i < 13; i++) {
-      Serial.printf("Time %d : %d songs\n", i-1, songCount[i-1]);
-    }
-
-    for(int i = 1; i < 13; i++) {
-      snprintf(path, 100, "/%d", i);
-      openFileN(path, songCount[i-1]);
-      file.getName(name, 100);
-      Serial.printf("%d:%d - %s\n", i, songCount[i-1], name);
-      file.close();
-    }
-
-  // Serial.printf("Starting MP3\n");
-  // if(!mp3.Playing()) {
-  //   Serial.printf("MP3 not playing\n");
-  //   if(openFileN("/1", 1)) {
-  //     cout << "Failed to open file" << endl;
-  //   }
-  //   file.getName(name, 100);
-  //   Serial.printf("file %s. Len %d\n", name, file.dataLength());
-  //   //file.open("/number/4.mp3");
-  //   mp3.Play(&file, false);
-  // } else {
-  //   Serial.printf("MP3 Playing??\n");
-  // }
-
-  // while(1) {
-  //   //break;
-  //   mp3.periodic();
-  // }
+  Serial.printf("Done with init\n");
 
 }
 
@@ -486,6 +532,8 @@ int nextTime = millis()+1000;
 bool idleLogged = false;
 bool workLogged = false;
 void loop() {
+
+  //Serial.printf("Loop %d\n", millis());
     bool workHour = hourHand->periodic();
     bool workMinute = minuteHand->periodic();
     bool workTcal =  tcal_periodic();
@@ -503,30 +551,6 @@ void loop() {
         digitalWrite(VCC_HALL, 0);
         enColor = true;
         showOff();
-      }
-
-      uint8_t status[3];
-      rtc.int_clear(status);
-      //int_cause_monitor(status);
-      if (status[0] & 0x80)
-      {
-        Serial.print("INT:every min/sec, ");
-
-        time_t current_time = rtc.time(NULL);
-        Serial.print("time:");
-        Serial.print(current_time);
-        Serial.print(" ");
-        Serial.println(ctime(&current_time));
-        digitalWrite(STP_EN_N, 0);
-        digitalWrite(VCC_HALL, 1);
-        //allow voltages to stablize
-        delay(100);
-        struct tm curr_tm;
-        gmtime_r(&current_time, &curr_tm);
-        minuteHand->setHandMinute(curr_tm.tm_min);
-        hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);
-
-        
       }
 
     } else {
