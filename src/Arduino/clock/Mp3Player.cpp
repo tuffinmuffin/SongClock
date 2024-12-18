@@ -41,15 +41,18 @@ void Mp3Player::Init(int powerPin, int powerDelayMs = 5) {
   }
 
 void Mp3Player::startAmp() {
-    if(amp.begin()) {
-      Serial.println("Error Initing amp");
-      return;
-    }
+    amp.begin();
 
     if(_gain >= -28) {
-      SetVolume(_gain);
-      amp.enableChannel(true, true);
+      SetGain(_gain);
     }
+
+    amp.setGain(_gain);
+    Serial.printf("Gain at %d\n", amp.getGain());
+
+    amp.setAGCCompression(TPA2016_AGC_4);
+    amp.setLimitLevel(31);
+    amp.enableChannel(true, true);
     
 }
 
@@ -59,16 +62,15 @@ int Mp3Player::periodic() {
     if((millis() - _lastCommandTime) > _shutdownDelayMs) {
       shutdown();
     }
+    return 1;
   }
   //periodic cleanup tasks?
-  return 1;
+  return 0;
 }
 
 void Mp3Player::shutdown() {
       Serial.printf("Mp3 shutdown at %d\n", millis());
-
-      _dataFile->close();
-      
+      Stop();
       //TODO release sdcard power enable
 
       //TODO send mute command to amp?
@@ -96,6 +98,8 @@ int Mp3Player::Play(FsFile* file, bool user) {
     digitalWrite(_powerPin, 1);
     delay(_powerDelayMs);
     _enabled = true;
+    startAmp();
+    
   }
 
   _dataFile = file;
@@ -105,7 +109,10 @@ int Mp3Player::Play(FsFile* file, bool user) {
     return -1;
   }
 
-  Serial.printf("Playing file %s\n", file);
+  static char fileName[100];
+  file->getName(fileName, 100);
+
+  Serial.printf("Playing file %s\n", fileName);
 
   _player.play(); //this will automatically fill the first buffer and get the channel info
 
@@ -130,11 +137,21 @@ int Mp3Player::Play(FsFile* file, bool user) {
   return 0;    
 }
 
-int Mp3Player::BlockingPlay(FsFile* file, bool user) {
+int Mp3Player::BlockingPlay(FsFile* file, bool user, bool stop) {
+  if(stop) {
+    mp3.Stop();
+  } else {
+    while(Playing()) {
+      ;
+    }
+  }
+
   int status = Play(file, user);
   if(status > 0) {
     while(Playing());
   }
+
+  //file->close();
 
   return status;
 }
@@ -162,22 +179,33 @@ void Mp3Player::decodeCallback(int16_t *data, int len){
   }
 }
 
+void Mp3Player::Stop() {
+  _player.pause();
+  _leftDMA.abort();
+  _rightDMA.abort();
+  _playing = false;
+  analogWrite(A0, 0);
+  analogWrite(A1, 0);
+}
+
 void Mp3Player::dma_callback(Adafruit_ZeroDMA *dma) {
   
-  digitalWrite(13, HIGH);
+  //digitalWrite(13, HIGH);
   //try to fill the next buffer
   if(_player.fill()){
     //stop
     _leftDMA.abort();
     _rightDMA.abort();
     _playing = false;
+    analogWrite(A0, 0);
+    analogWrite(A1, 0);
     return;
   }
   //heartbeat
   uint32_t currentTime = millis();
   _playTime += currentTime;
   _lastCommandTime = currentTime;
-  digitalWrite(13, LOW);
+  //digitalWrite(13, LOW);
 }
 
 

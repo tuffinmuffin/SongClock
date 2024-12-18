@@ -162,7 +162,6 @@ void PCF2131_base::periodic_interrupt_enable( periodic_int_select sel, int int_s
 	
 	uint8_t v	= (sel == EVERY_MINUTE) ? 0x02 : 0x01;
 
-	v=3;
 	_bit_op8( Control_1, ~0x03, v );
 	_bit_op8( int_mask_reg[ int_sel ][ 0 ], ~0x30, ~(v << 4) );
 }

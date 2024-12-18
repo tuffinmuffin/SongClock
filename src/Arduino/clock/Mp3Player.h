@@ -24,7 +24,7 @@
 class Mp3Player {
   public:
   void Init(int powerPin, int powerDelayMs);
-  int BlockingPlay(FsFile* file, bool user);
+  int BlockingPlay(FsFile* file, bool user, bool stop);
   int Play(FsFile* file, bool user);
   int QueueNext(const char* file);
   bool Playing();
@@ -32,8 +32,19 @@ class Mp3Player {
   int getPlayTimeMs() { return _playTime; }
   void resetPlayTime() { _playTime = 0;}
   void SetGain(int8_t gain) {
+    if(gain < -28) {
+      gain = -28;
+    }
+    if(gain > 30) {
+      gain = 30;
+    }
     _gain = gain;
-    amp.setGain(_gain);
+    if(_enabled) {
+      amp.setGain(_gain);
+    }
+  }
+  int8_t GetGain() {
+    return _gain;
   }
   void SetVolume(float volume) {
     SetGain(map(volume, 0, 100.0, -29, 30));
@@ -80,7 +91,7 @@ class Mp3Player {
   bool _enabled = false;
   uint32_t _playTime = 0;
   uint32_t _lastUpdateTime = 0;
-  int8_t _gain = 6;
+  int8_t _gain = -20;
 };
 
 
