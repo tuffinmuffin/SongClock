@@ -13,6 +13,7 @@
 
 //Stepper Lib
 #include "clockHand.h"
+#include "DateTime.h"
 
 //#define INTERNAL_RTC
 #define EXTERNAL_RTC
@@ -24,14 +25,15 @@
 #endif
 
 #ifdef INTERNAL_RTC
-#include "RTCZero.h"
+#include "RTC_SAMD51.h"
+RTC_SAMD51 rtc;
 #endif
 
 //LED lib
 #include <SPI.h>
 #include <Adafruit_DotStar.h>
 
-
+bool chimeHour = false;
 
 // Here's how to control the LEDs from any two pins:
 #define DATAPIN    4
@@ -57,7 +59,7 @@ void showLed(int r, int g, int b, int bright) {
   led.setPixelColor(0, r, g, b);
   led.setBrightness(bright/4);
   led.show();
-  //delay(10);
+  //delay(2);
 }
 
 
@@ -70,7 +72,7 @@ void showWhite(uint8_t bright) { showLed(255,0,0,bright);}
 void showMagenta(uint8_t bright) { showLed(255,0,255,bright);}
 void showCyan(uint8_t bright) { showLed(0,255,255,bright);}
 
-void showOff() { led.clear(); }
+void showOff() { showLed(0,0,0,0); }
 
 enum MenuMode {
   menIdle = 0,
@@ -96,17 +98,19 @@ struct {
   bool rstPressed;
   bool userServiceRq;
   time_t time;
+  DateTime dtime;
   bool timeLoaded;
-  
+  bool scheduleBatteryCheck;
   MenuMode menuMode;
 } userInput = {};
 
 ArduinoOutStream cout(Serial);
 ;
 SdFs sd;
-FsFile file;
+FsFile musicFile;
 FsFile userFile;
 FsFile folder;
+
 
 //GPIO
 static const int USER_SEL     = E0;
@@ -148,9 +152,11 @@ ClockHand* minuteHand;
 PCF2131_I2C rtc;
 #endif
 
-#ifdef INTERNAL_RTC
-RTCZero rtcInternal;
-#endif
+void printDateTime(DateTime& time) {
+  char timeStr[] = "DDD, DD MMM YYYY hh:mm:ss";
+  char timeString[100]  = {};
+  Serial.print(time.toString(timeString));
+}
 
 /**
  * \brief Put the system to sleep waiting for interrupt
@@ -173,9 +179,9 @@ bool openFileN(const char* path, int count) {
     return false;
   }
   for(int i = 0; i <= count; i++) {
-    file.openNext(&folder);
+    musicFile.openNext(&folder);
   }
-  if(!file.isOpen()) {
+  if(!musicFile.isOpen()) {
     Serial.printf("Failed to open %s File %d - not found\n", path, count);
     return false;
   }
@@ -205,12 +211,13 @@ void cidDmp() {
   cout << endl;
 }
 
-
+uint64_t holdOffSleepUntil = 0;
 //UI callbacks
 void userSelPressed(void* data, bool state) {
   Serial.printf("userSelPressed %d\n", state);
   userInput.selectPressed = state;
   userInput.userServiceRq = true;
+  holdOffSleepUntil = millis64() + 60000;
 }
 
 void userSelHeld(void* data, bool state) {
@@ -223,37 +230,53 @@ void userUpPressed(void* data, bool state) {
   Serial.printf("userUpPressed %d\n", state);
   userInput.upPressed = state;
   userInput.userServiceRq = true;
-
+  holdOffSleepUntil = millis64() + 60000;
 }
 
 void userUpHeld(void* data, bool state) {
   Serial.printf("userUpHeld %d\n", state);
   userInput.upHeld = state;
   userInput.userServiceRq = true;
+  holdOffSleepUntil = millis64() + 60000;
 }
 
 void userDownPressed(void* data, bool state) {
   Serial.printf("userDownPressed %d\n", state);
   userInput.downPressed = state;
   userInput.userServiceRq = true;
+  holdOffSleepUntil = millis64() + 60000;
 }
 
 void userDownHeld(void* data, bool state) {
   Serial.printf("userDownHeld %d\n", state);  
   userInput.downHeld = state;
   userInput.userServiceRq = true;
-
+  holdOffSleepUntil = millis64() + 60000;
 }
 
 void userRstPressed(void* data, bool state) {
   Serial.printf("userRstPressed %d\n", state);
   userInput.rstPressed = state;
-  userInput.userServiceRq = true;  
+  userInput.userServiceRq = true; 
+  //mark hands to recal
+  digitalWrite(VCC_HALL, 1);
+  digitalWrite(STP_EN_N, 0);
+  hourHand->calibrate();
+  minuteHand->calibrate();
+    
+  holdOffSleepUntil = millis64() + 60000;
 }
+
+bool rtcEventService = false;
+DateTime rtcEvent;
+uint64_t rtcPlayerExpire = 0;
+const static uint64_t CHIME_PLAYTIME_MS = (60 * 1000);
 
 #ifdef EXTERNAL_RTC
 
+
 void rtcPcaEvent(void* data, bool state) {
+      static int playingHour = -1;
       Serial.printf("RTC Minute %d %d\n", state, digitalRead(RTC_ALARM));
       uint8_t status[3];
       rtc.int_clear(status);
@@ -261,9 +284,11 @@ void rtcPcaEvent(void* data, bool state) {
       //int_cause_monitor(status);
       if (status[0] & 0x80)
       {
+        rtcEventService = true;
         Serial.print("INT:every min/sec, ");
 
         time_t current_time = rtc.time(NULL);
+        rtcEvent = DateTime(current_time);
         Serial.print("time:");
         Serial.print(current_time);
         Serial.print(" ");
@@ -272,72 +297,117 @@ void rtcPcaEvent(void* data, bool state) {
         digitalWrite(VCC_HALL, 1);
         //allow voltages to stablize
 
-        if(userInput.menuMode == menHour || userInput.menuMode == menMinute) {
-          return;
+        bool chimeTime = false;
+        int chimeValue = 0;
+        if(chimeHour) {
+            chimeTime = rtcEvent.minute() == 0;
+            playingHour = rtcEvent.hour() % 12; //1-12 or 0-24 maps to 0-11 (0 == noon/midniht)
+        } else {
+            chimeTime = rtcEvent.minute() == 0;
+            chimeValue = rtcEvent.minute() / 5;
         }
-        delay(50);
-        struct tm curr_tm;
-        gmtime_r(&current_time, &curr_tm);
-        minuteHand->setHandMinute(curr_tm.tm_min);
-        hourHand->setHandHour(curr_tm.tm_min, curr_tm.tm_hour);
 
-        if(curr_tm.tm_min % 5 == 0) {
-          if(!mp3.Playing()) {
-            bool status = openRandomSong(curr_tm.tm_min / 5);
-            if(status) {
-              Serial.printf("Playing a song for %d\n", curr_tm.tm_min);
-            }
-            else 
-            {
-              Serial.printf("Failed to open a song for %d", curr_tm.tm_min);
-              return;
-            }
-            
-            mp3.Play(&file, false);
-          }
-          else {
-            Serial.printf("Song still playing\n");
-          }
-          }
+        if(chimeTime) {
+          //start playing
+          Serial.printf("Imagine a song\n");
+          rtcPlayerExpire = millis64() + CHIME_PLAYTIME_MS;
+          playingHour = chimeValue;
+        }
       }
+}
 
-      Watchdog.reset();
+#endif
+
+
+#ifdef INTERNAL_RTC
+DateTime rtcEvent;
+void rtcInternalEvent(uint32_t val) {
+  rtcEventService = true;
+  rtcEvent = rtc.now();
 }
 #endif
 
-#ifdef INTERNAL_RTC
-bool rtcInternalEventService = false;
-void rtcInternalEvent() {
-  rtcInternalEventService = true;
-}
-
-
 bool rtcPeriodic() {
-  if(!rtcInternalEventService) {
-    return false;
+  bool retStatus = false;
+  static int playingHour = -1;
+  //keep rolling sounds if sounds
+  if(rtcPlayerExpire != 0 && millis64() < rtcPlayerExpire) {
+    if(!mp3.Playing()) {
+        Serial.printf("Starting next file at %d. (%d left)\n", millis64(), rtcPlayerExpire - millis64());
+        bool status = openRandomSong(playingHour);
+        if(status) {
+          Serial.printf("Playing a song for %d\n", playingHour);
+        }
+        else 
+        {
+          Serial.printf("Failed to open a song for %d", playingHour);
+        }
+        
+        mp3.Play(&musicFile, false);
+    }
+    //check if song is playing still, if not play next
+    retStatus = true;
+  } else {
+    //done playing
+    rtcPlayerExpire = 0;
   }
-  rtcInternalEventService = false;
-  int year = rtcInternal.getYear();
-  int month = rtcInternal.getMonth();
-  int day = rtcInternal.getDay();
-  int hour = rtcInternal.getHours();
-  int min = rtcInternal.getMinutes();
-  int sec = rtcInternal.getSeconds();
 
-  Serial.printf("RTC Alarm: 10/24/2224 %02d/%02d\%04d %02d:%02d:%02d\n", month, day, year, hour, min, sec);
+  //stop if no event
+  if(!rtcEventService) {
+    return retStatus;
+  }
+
+  rtcEventService = false;
+
+  Serial.printf("RTC Alarm:  %02d/%02d/%04d %02d:%02d:%02d\n", rtcEvent.month(), rtcEvent.day(), rtcEvent.year(), rtcEvent.hour(), rtcEvent.minute(), rtcEvent.second());
+
+  if(userInput.menuMode == menHour || userInput.menuMode == menMinute) {
+    //
+  } 
+  else 
+  {
+    minuteHand->setHandMinute(rtcEvent.minute());
+    hourHand->setHandHour(rtcEvent.minute(), rtcEvent.hour());
+  }
+
+    bool chimeTime = false;
+    int chimeValue = 0;
+    if(chimeHour) {
+        Serial.printf("Hour Chime mode\n");
+        chimeTime = rtcEvent.minute() == 0;
+        chimeValue = rtcEvent.hour() % 12; //1-12 or 0-24 maps to 0-11 (0 == noon/midniht)
+    } else {
+        Serial.printf("Minute Chime mode\n");
+        chimeTime = rtcEvent.minute() % 5 == 0;
+        chimeValue = rtcEvent.minute() / 5;
+    }
+
+  
+  if(chimeTime) {
+    //start playing
+    Serial.printf("Imagine a song playing at %d:%d\n", rtcEvent.hour(), rtcEvent.minute());
+    rtcPlayerExpire = millis64() + CHIME_PLAYTIME_MS;
+    playingHour = chimeValue;
+    if(playingHour == 0) {
+      playingHour = 12;
+    }       
+  }
+
 
   digitalWrite(STP_EN_N, 0);
   digitalWrite(VCC_HALL, 1);
   //allow voltages to stablize
   delay(50);
 
-  minuteHand->setHandMinute(min);
-  hourHand->setHandHour(sec, min);
+  retStatus = true;
 
-  return false;
+  if(rtcEvent.minute() == 2) {
+    userInput.scheduleBatteryCheck = true;
+  }
+
+  return retStatus;
 
 }
-#endif
 
 void userRstHeld(void* data, bool state) {
   Serial.printf("userRstHeld %d\n", state);
@@ -476,22 +546,23 @@ void setTimeInternal(struct tm* now_tm) {
     now_tm->tm_sec = 0;
   }
 
-  rtcInternal.setDate(now_tm->tm_mday, now_tm->tm_mon - 1 , now_tm->tm_year - 100 );
-  rtcInternal.setTime(now_tm->tm_hour, now_tm->tm_min, now_tm->tm_sec);
+  DateTime now = DateTime(F(__DATE__), F(__TIME__));
+  //!!! notice The year is limited to 2000-2099
+  Serial.println("adjust time!");
+  rtc.adjust(now);
 }
 
 
 
 void setupInternalRtc() {
-  rtcInternal.begin();
 
-  //set time
-  setTimeInternal(nullptr);
+  //setTimeInternal(nullptr);
+  rtc.begin();
 
-  //setup alarm and register callback
-  rtcInternal.setAlarmSeconds(0);
-  rtcInternal.attachInterrupt(rtcInternalEvent);
-  rtcInternal.enableAlarm(rtcInternal.MATCH_SS);
+  DateTime alarm = DateTime(0, 0, 0, 0, 0, 0);
+  rtc.setAlarm(0, alarm);
+  rtc.enableAlarm(0, rtc.MATCH_SS);
+  rtc.attachInterrupt(rtcInternalEvent); // callback while alarm is matc
 
 }
 #endif
@@ -503,6 +574,9 @@ union BRAM {
   uint8_t buff[1024 * 8];
   struct {
     uint32_t key;
+    uint8_t hourHand[sizeof(ClockHand)];
+    uint8_t minuteHand[sizeof(ClockHand)];
+
     //TODO add data
   } data;
   uint32_t key;
@@ -510,15 +584,18 @@ union BRAM {
 
 BRAM* bram = (BRAM*) 0x47000000;
 static_assert(sizeof(BRAM) <= (1024*8), "BRAM must be < 8KB");
+bool bramRestored = false;
 void restoreBram() {
   Serial.printf("BRAM key is 0x%08x; Valid key is 0x%08x\n", bram->key, BRAM_VALID);
   if(bram->data.key == BRAM_VALID) {
     Serial.printf("BRAM recovered\n");
+    bramRestored = true;
     return;
   }
   memset(bram, 0, sizeof(BRAM));
   bram->key = BRAM_VALID;
   Serial.printf("BRAM has been inited\n");
+
 }
 
 void invalidateBram(bool clear) {
@@ -534,10 +611,15 @@ int songCount[12] = {};
 int currSong[12] = {};
 
 bool openRandomSong(int hour) {
-  hour = (hour - 1 % 12);
-  int index = random(0, songCount[hour - 1]);
+  int hourO = hour;
+  hour = (hour % 12);
+  int index = random(0, songCount[hour]);
   static char fileName[100];
-  snprintf(fileName, 100, "/%d", hour+1);
+  if(hour == 0) {
+    hour = 12;
+  }  
+  snprintf(fileName, 100, "/%d", hour);
+  Serial.printf("Random song %s (hour %d/%d)\n", fileName, hour, hourO);
   currSong[hour] = index;
 
   return openFileN(fileName, index);
@@ -557,11 +639,11 @@ void readSdInit() {
         break;
       }
 
-      while(file.openNext(&folder)) {
+      while(musicFile.openNext(&folder)) {
         songCount[i-1]++;
-        // file.getName(name, 100);
-        // Serial.printf("%s/%s - %d\n", path, name, file.dataLength());
-        file.close();
+        // musicFile.getName(name, 100);
+        // Serial.printf("%s/%s - %d\n", path, name, musicFile.dataLength());
+        musicFile.close();
       }
       folder.close();
     }
@@ -573,21 +655,21 @@ void readSdInit() {
     // for(int i = 1; i < 13; i++) {
     //   snprintf(path, 100, "/%d", i);
     //   openFileN(path, songCount[i-1]);
-    //   file.getName(name, 100);
+    //   musicFile.getName(name, 100);
     //   Serial.printf("%d:%d - %s\n", i, songCount[i-1], name);
-    //   file.close();
+    //   musicFile.close();
     // }
 
   /*Serial.printf("Starting MP3\n");
   if(!mp3.Playing()) {
     Serial.printf("MP3 not playing\n");
     if(!openFileN("/1", 2)) {
-      cout << "Failed to open file" << endl;
+      cout << "Failed to open musicFile" << endl;
     }
-    file.getName(name, 100);
-    Serial.printf("file %s. Len %d\n", name, file.dataLength());
-    //file.open("/number/4.mp3");
-    mp3.Play(&file, false);
+    musicFile.getName(name, 100);
+    Serial.printf("musicFile %s. Len %d\n", name, musicFile.dataLength());
+    //musicFile.open("/number/4.mp3");
+    mp3.Play(&musicFile, false);
   } else {
     Serial.printf("MP3 Playing??\n");
   }
@@ -607,6 +689,7 @@ const static char* AUDIO_PAUSE = "/menu/500msp.mp3";
 const static char* AUDIO_MINUTE = "/menu/minute.mp3";
 const static char* AUDIO_HOUR = "/menu/hour.mp3";
 const static char* AUDIO_AM = "/menu/am.mp3";
+const static char* AUDIO_LOW_BATT = "/menu/lowbatt.mp3";
 
 void playUserUi(const char* file, bool stopCurr = false) {
   if(!userFile.open(file)) {
@@ -614,7 +697,6 @@ void playUserUi(const char* file, bool stopCurr = false) {
     return;
   }
   mp3.BlockingPlay(&userFile, true, stopCurr);
-  delay(500);
 }
 
 
@@ -649,22 +731,32 @@ void volumeControl() {
 void minuteControl() {
   if(!userInput.timeLoaded) {
     userInput.timeLoaded = true;
+#ifdef EXTERNAL_RTC
     userInput.time = rtc.time(nullptr);
+#endif
+#ifdef INTERNAL_RTC
+    userInput.dtime = rtc.now();
+    userInput.dtime = userInput.dtime - TimeSpan(userInput.dtime.second());
+#endif
     Serial.printf("Minute Control: Time Loaded\n");
   }
 
   digitalWrite(STP_EN_N, 0);
   digitalWrite(VCC_HALL, 1);
   delay(10);
-
+#ifdef EXTERNAL_RTC
   struct tm curr_tm;
   gmtime_r(&userInput.time, &curr_tm);
   Serial.printf("Start time: ");
   Serial.println(ctime(&userInput.time));
+#endif
 
+#ifdef EXTERNAL_RTC
   if(userInput.upPressed) {
     userInput.upPressed = false;
+    #ifdef EXTERNAL_RTC
     curr_tm.tm_min++;
+    #endif
   }
   if(userInput.downPressed) {
     userInput.downPressed = false;
@@ -682,19 +774,40 @@ void minuteControl() {
   snprintf(fileName, 20, "/number/%d.mp3",curr_tm.tm_min);
   //playUserUi(fileName, true);
   minuteHand->setHandMinute(curr_tm.tm_min);
+  #endif
+  #ifdef INTERNAL_RTC
+  if(userInput.upPressed) {
+    userInput.upPressed = false;
+    userInput.dtime = userInput.dtime + TimeSpan(60);
+  }
+  if(userInput.downPressed) {
+    userInput.downPressed = false;
+    //curr_tm.tm_min--;
+  }  
+  minuteHand->setHandMinute(userInput.dtime.minute());
+  char fileName[20];
+  snprintf(fileName, 20, "/number/%d.mp3",userInput.dtime.minute());
+  //playUserUi(fileName, true);  
+  #endif
 }
 
 void hourControl() {
   if(!userInput.timeLoaded) {
     userInput.timeLoaded = true;
+    #ifdef EXTERNA_RTC
     userInput.time = rtc.time(nullptr);
+    #endif
+#ifdef INTERNAL_RTC
+    userInput.dtime = rtc.now();
+    userInput.dtime = userInput.dtime - TimeSpan(userInput.dtime.second());
+#endif
     Serial.printf("Hour Control: Time Loaded\n");
   }
 
   digitalWrite(STP_EN_N, 0);
   digitalWrite(VCC_HALL, 1);
   delay(10);
-
+#ifdef EXTERNAL_RTC
   struct tm curr_tm;
   gmtime_r(&userInput.time, &curr_tm);
   Serial.printf("Start time: ");
@@ -708,7 +821,6 @@ void hourControl() {
     userInput.downPressed = false;
     //curr_tm.tm_min--;
   }
-
   //clamp to an hour
   curr_tm.tm_hour = curr_tm.tm_hour % 12;
   curr_tm.tm_sec = 0;
@@ -720,6 +832,23 @@ void hourControl() {
   snprintf(fileName, 20, "/number/%d.mp3",curr_tm.tm_hour);
   //playUserUi(fileName, true);
   hourHand->setHandHour(0, curr_tm.tm_hour);
+  #endif
+
+  #ifdef INTERNAL_RTC
+  if(userInput.upPressed) {
+    userInput.upPressed = false;
+    userInput.dtime = userInput.dtime + TimeSpan(60*60);
+  }
+  if(userInput.downPressed) {
+    userInput.downPressed = false;
+    //curr_tm.tm_min--;
+  }
+
+  char fileName[20];
+  snprintf(fileName, 20, "/number/%d.mp3",userInput.dtime.hour());
+  //playUserUi(fileName, true);
+  hourHand->setHandHour(0, userInput.dtime.hour());
+  #endif
 }
 
 bool userPeriodic() {
@@ -792,15 +921,25 @@ bool userPeriodic() {
     if(userInput.timeLoaded) {
       struct tm now_tm;
       gmtime_r(&userInput.time, &now_tm);
+#ifdef EXTERNAL_RTC
       rtc.set(&now_tm);
       userInput.timeLoaded = false;
       minuteHand->setHandMinute(now_tm.tm_min);
-      hourHand->setHandHour(now_tm.tm_min, now_tm.tm_hour);
+      hourHand->setHandHour(now_tm.tm_min, now_tm.tm_hour);      
+#endif
+
+#ifdef INTERNAL_RTC
+      userInput.timeLoaded = false;
+      rtc.adjust(userInput.dtime);
+      minuteHand->setHandMinute(userInput.dtime.minute());
+      hourHand->setHandHour(userInput.dtime.minute(), userInput.dtime.hour());
+#endif
       Serial.printf("User Time updated\n");
     }
     userInput.menuMode = menIdle;
     Serial.printf("Menu exit\n");
     playUserUi(AUDIO_EXIT,false);
+
     return false;
   } 
 
@@ -814,9 +953,7 @@ void setup() {
   led.begin();
   Wire.begin();
   Wire.setClock(10000);
-  showLed(255,0,0, 128);
 
-  pinMode(13, OUTPUT);
   Serial.begin(115200);
   int loop_cnt = 0;
   while(!Serial) {
@@ -825,7 +962,6 @@ void setup() {
     }
     loop_cnt++;
     delay(100);
-
   }
 
   restoreBram();
@@ -840,10 +976,8 @@ void setup() {
   digitalWrite(ENABLE_VCC, 1);
   digitalWrite(E_ENABLE, 1);
   digitalWrite(VCC_HALL, 1);
-  digitalWrite(STP_EN_N, 1);
-  
   digitalWrite(STP_EN_N, 0);
-  delay(100);
+  delay(10);
 
   Serial.println("GPIO Done\n");
 
@@ -853,14 +987,28 @@ void setup() {
 #ifdef INTERNAL_RTC
   setupInternalRtc();
 #endif
+  //bramRestored = false;
+  if(bramRestored && (Watchdog.resetCause() != 0x40)) {
+    Serial.printf("Clock Hands Restored\n");
+    //restore from bram
+  } else {
+    ClockHand minTmp(STP_A1, STP_A2_A3, STP_A2_A3, STP_A4, MINUTE_HALL, 274, 5);
+    ClockHand hourTmp(STP_B4, STP_B2_B3, STP_B2_B3, STP_B1, HOUR_HALL, 94, 3);
+    memcpy(bram->data.minuteHand, &minTmp, sizeof(ClockHand));
+    memcpy(bram->data.hourHand, &hourTmp, sizeof(ClockHand));
 
-  minuteHand = new ClockHand(STP_A1, STP_A2_A3, STP_A2_A3, STP_A4, MINUTE_HALL, 274, 5);
-  hourHand = new ClockHand(STP_B4, STP_B2_B3, STP_B2_B3, STP_B1, HOUR_HALL, 94, 3);
+  //use if removed from bram
+  //minuteHand = new ClockHand(STP_A1, STP_A2_A3, STP_A2_A3, STP_A4, MINUTE_HALL, 274, 5);
+  //hourHand = new ClockHand(STP_B4, STP_B2_B3, STP_B2_B3, STP_B1, HOUR_HALL, 94, 3);
+  }
+  minuteHand = (ClockHand*) bram->data.minuteHand;
+  hourHand = (ClockHand*) bram->data.hourHand;
+  
   //minuteHand->setHandMinute(30);
   //delay(2000);
-  minuteHand->setStepDelay(15);
+  minuteHand->setStepDelay(10);
   //hourHand->setHandMinute(30);
-  hourHand->setStepDelay(15);
+  hourHand->setStepDelay(10);
   //set inital time
 #ifdef EXTERNAL_RTC
   uint8_t status[3];
@@ -877,15 +1025,16 @@ void setup() {
 
 
 #ifdef INTERNAL_RTC
-  int minute = rtcInternal.getMinutes();
-  int hour = rtcInternal.getHours();
-  Serial.printf("Setting time to %02d:%02d\n", hour, minute);
-  minuteHand->setHandMinute(minute);
-  hourHand->setHandHour(hour, minute);
+  DateTime now = rtc.now();
+  Serial.printf("Setting time to %02d:%02d\n", now.hour(), now.minute());
+  minuteHand->setHandMinute(now.minute());
+  hourHand->setHandHour(now.minute(), now.hour());
 #endif
 
-  hourHand->calibrate();
-  minuteHand->calibrate();
+  if(!bramRestored) {
+    hourHand->calibrate();
+    minuteHand->calibrate();
+  }
 
   Serial.println("Steppers Created");
 
@@ -919,16 +1068,32 @@ int i = 0;
 int nextTime = millis()+1000;
 bool idleLogged = false;
 bool workLogged = false;
+uint64_t acculmSleep = 0;
 void loop() {
-
+    Watchdog.enable(10000);
+    showGreen(64);
   //Serial.printf("Loop %d\n", millis());
     bool workHour = hourHand->periodic();
     bool workMinute = minuteHand->periodic();
     bool workTcal =  tcal_periodic();
     bool workMp3 = mp3.periodic();
-    bool userInput = userPeriodic();
+    bool workUserInput = userPeriodic();
+    bool workRtc = rtcPeriodic();  
 
-    bool work = workHour || workMinute || workTcal || workMp3 | userInput;
+    if(userInput.scheduleBatteryCheck) {
+      userInput.scheduleBatteryCheck = false;
+      Serial.printf("Checking battery\n");
+      double batV = getBatteryVoltage();
+      if(batV < 4.10) {
+        musicFile.open(AUDIO_LOW_BATT);
+        mp3.BlockingPlay(&musicFile, true, false);
+      }
+    }
+
+    showOff();
+    Watchdog.disable();
+
+    bool work = workHour || workMinute || workTcal || workMp3 || workUserInput || workRtc;
     //delay(100);
 
     //only run if no work
@@ -937,15 +1102,44 @@ void loop() {
         Serial.printf("%d idling. Battery ", millis());
         Serial.println(getBatteryVoltage());
         idleLogged = true;
-        delay(50);
         digitalWrite(STP_EN_N, 1);
         digitalWrite(VCC_HALL, 0);
-        enColor = true;
-        showOff();
-      }
+      } else {
+        if(Serial) {
+          //Serial.println("Not sleeping\n");
+          delay(1000);
+        }
+        else if(holdOffSleepUntil == 0 || holdOffSleepUntil < millis64() )
+        {
+          Serial.println("Sleeping\n");
+          showBlue(64);
+          USBDevice.detach();
+          Serial.end();
+          acculmSleep += Watchdog.sleep(10000);
 
-      delay(1000);
-      //watchdog.sleep
+          if(rtcEventService || tcal_isrNeeded() || (acculmSleep > 40000)) {
+            USBDevice.attach();
+            delay(200);
+            Serial.begin(115200);
+            int loop_cnt = 0;
+            while(!Serial) {
+              if(loop_cnt > 20) {
+                break;
+              }
+              loop_cnt++;
+              delay(100);
+            }
+            Serial.printf("Slept for %d. Waking now to do work\n", acculmSleep);
+
+            if(acculmSleep > 50000) {
+              Serial.printf("simluated wdt\n");
+            }
+
+            acculmSleep = 0;
+          }
+        }
+      }
+      showOff();
 
     } else {
       idleLogged = false;
@@ -956,17 +1150,4 @@ void loop() {
     hourHand->calibrate();
     minuteHand->calibrate();
   }
-  //delay(2000);
-  /*
-  if(!mp3.Playing()) {
-    Serial.printf("On index %d, %s\n", i, files[i]);
-    if(file.open(files[i]), O_RDONLY) {
-      cout << "Failed to open file" << endl;
-    }
-
-    mp3.Play(&file, false);
-    i = (i+1) % 3;
-  }
-
-  mp3.periodic();*/
 }

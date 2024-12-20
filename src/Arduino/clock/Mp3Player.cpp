@@ -21,6 +21,13 @@ void mp3DecodeCallback(int16_t *data, int len) {
   mp3.decodeCallback(data,len);
 }
 
+void Mp3Player::PlayerInit() {
+    _player.begin();
+    //this will be how the player asks for data
+    _player.setBufferCallback(mp3GetMoreData);
+    //this will be how the player asks you to clean the data
+    _player.setDecodeCallback(mp3DecodeCallback);
+}
 
 void Mp3Player::Init(int powerPin, int powerDelayMs = 5) {
     _powerPin = powerPin;
@@ -30,13 +37,6 @@ void Mp3Player::Init(int powerPin, int powerDelayMs = 5) {
     analogWrite(A0, 2048);
     analogWrite(A1, 2048);
     //begin the player
-    _player.begin();
-
-    //this will be how the player asks for data
-    _player.setBufferCallback(mp3GetMoreData);
-    //this will be how the player asks you to clean the data
-    _player.setDecodeCallback(mp3DecodeCallback);
-
 
   }
 
@@ -82,6 +82,9 @@ void Mp3Player::shutdown() {
 
 
 int Mp3Player::Play(FsFile* file, bool user) {
+
+  _player.pause();
+  PlayerInit();
   if(user) {
     _shutdownDelayMs = 5000;
   }
@@ -147,6 +150,7 @@ int Mp3Player::BlockingPlay(FsFile* file, bool user, bool stop) {
   }
 
   int status = Play(file, user);
+  delay(10);
   if(status > 0) {
     while(Playing());
   }

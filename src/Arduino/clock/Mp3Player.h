@@ -80,6 +80,7 @@ class Mp3Player {
   bool _playing = false;
 
   Adafruit_TPA2016 amp = Adafruit_TPA2016();
+  void PlayerInit();
 
   //the output data buffers
   int16_t *ping, *pong;

@@ -65,12 +65,12 @@ bool initTcal9539(uint8_t addr, int32_t intPin) {
     tcal9539_count++;
 
     pinMode(intPin, INPUT);
-    
+
     if(intPin > 0) {
       pinMode(intPin, INPUT);
       attachInterrupt(digitalPinToInterrupt(intPin), tcalInt, FALLING);
     }
-    
+
     return true;
 }
 
@@ -79,14 +79,13 @@ uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr) {
     showRed();
     PRINTF("tcal9539_reg8Read 0x%2x 0x%02x stared\n", device, addr);
     while(Wire.available()) { Wire.read();}
-    showBlue();
     PRINTF("tcal9539_reg8Read 0x%2x 0x%02x begin\n", device, addr);
     Wire.beginTransmission(device);
     PRINTF("tcal9539_reg8Read 0x%2x 0x%02x ws\n", device, addr);
     Wire.write(addr);
     PRINTF("tcal9539_reg8Read 0x%2x 0x%02x we\n", device, addr);
     int status = Wire.endTransmission();
-    showYellow();
+    showPurple();
     PRINTF("tcal9539_reg8Read 0x%2x 0x%02x et\n", device, addr);
     //Serial.printf("read8 %02x %02x %d\n", device, addr, status);
     Wire.requestFrom(device, 1);
@@ -95,16 +94,15 @@ uint8_t tcal9539_reg8Read(uint8_t device, uint8_t addr) {
     uint8_t val = Wire.read();
     PRINTF("tcal9539_reg8Read 0x%2x 0x%02x rd\n", device, addr);
     //Serial.printf("%02x read: %02x %02x\n", device, addr, val);
-    showGreen();
+    showOff();
     return val;
 }
 
 void tcal9539_reg8Write(uint8_t device, uint8_t addr, uint8_t val) {
-  showRed();
+    showRed();
     //Serial.printf("%02x write: %02x %02x\n", device, addr, val);
     PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d stared\n", device, addr, val);
     Wire.beginTransmission(device);
-    showYellow();
     PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d br\n", device, addr, val);
     Wire.write(addr);
     PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d wradd\n", device, addr, val);
@@ -112,22 +110,21 @@ void tcal9539_reg8Write(uint8_t device, uint8_t addr, uint8_t val) {
     PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d wr\n", device, addr, val);
     Wire.endTransmission();
     PRINTF("tcal9539_reg8Write 0x%2x 0x%02x %d end\n", device, addr, val);
-    showGreen();
+    showOff();
     return;
 }
 
 uint16_t tcal9539_reg16Read(uint8_t device, uint8_t addr) {
-  showRed();
+    showRed();
     PRINTF("tcal9539_reg16Read 0x%2x 0x%02x started\n", device, addr);
     while(Wire.available()) { Wire.read();}
-    showYellow();
     PRINTF("tcal9539_reg16Read 0x%2x 0x%02x f\n", device, addr);
     Wire.beginTransmission(device);
     PRINTF("tcal9539_reg16Read 0x%2x 0x%02x br\n", device, addr);
     Wire.write(addr);
     PRINTF("tcal9539_reg16Read 0x%2x 0x%02x wr\n", device, addr);
-    int status = Wire.endTransmission();  
-    showBlue();
+    int status = Wire.endTransmission();
+    showPurple();
     PRINTF("tcal9539_reg16Read 0x%2x 0x%02x et\n", device, addr);
 
     Wire.requestFrom(device, 2);
@@ -138,29 +135,33 @@ uint16_t tcal9539_reg16Read(uint8_t device, uint8_t addr) {
     PRINTF("tcal9539_reg16Read 0x%2x 0x%02x rd1\n", device, addr);
     val |= (uint16_t)Wire.read() << 8;
     PRINTF("tcal9539_reg16Read 0x%2x 0x%02x done\n", device, addr);
-    showGreen();
-    
+    showOff();
+
 
     return val;
 }
 
 void tcal9539_reg16Write(uint8_t device, uint8_t addr, uint16_t val) {
+    showRed();
     Wire.beginTransmission(device);
     Wire.write(addr);
     Wire.write((uint8_t) (val & 0xFF));
     Wire.write((uint8_t) (val >> 8));
     Wire.endTransmission();
+    showOff();
     return;
 }
 
 void tcal9539_reset(uint8_t addr) {
+  showRed();
   Serial.printf("Resetting 0x%02x\n", addr);
   Wire.beginTransmission(0);
   delay(10);
   Wire.write(0x6);
   delay(10);
-  Wire.endTransmission(true);  
-  delay(10);  
+  Wire.endTransmission(true);
+  delay(10);
+  showOff();
 }
 
 uint8_t tcal9539_regRMW(uint8_t device, uint8_t addr, uint8_t val, uint8_t mask) {
@@ -175,7 +176,7 @@ uint8_t tcal9539_regRMW(uint8_t device, uint8_t addr, uint8_t val, uint8_t mask)
 void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
     //Serial.printf("Configuring 0x%08x as %d\n", ulPin, ulMode);
     struct tcal_pin* pin = getTcal9539Chan(ulPin);
-    if(!pin) { 
+    if(!pin) {
       //Serial.printf("Invalid TCAL %d\n", ulPin);
       return;
       }
@@ -228,14 +229,14 @@ void tcal9539_pinMode( uint32_t ulPin, uint32_t ulMode ) {
       pin->input = true;
       pin->invertPol = false;
       pin->pullEn = true;
-      pin->pullUp = true;    
+      pin->pullUp = true;
     break ;
 
     case INPUT_PULLDOWN:
       pin->input = true;
       pin->invertPol = false;
       pin->pullEn = true;
-      pin->pullUp = false;    
+      pin->pullUp = false;
     break ;
 
     case OUTPUT:
@@ -292,7 +293,7 @@ int tcal9539_digitalRead( uint32_t ulPin) {
     if(!pin || !pin->i2cAddr) {
         Serial.printf("TCAL read failed %d\n", ulPin);
         return 0;
-    }  
+    }
 
     uint8_t data = tcal9539_reg8Read(pin->i2cAddr, pin->rdAddr);
 
@@ -300,7 +301,7 @@ int tcal9539_digitalRead( uint32_t ulPin) {
  }
 
 int tcal9539_isOwned(uint32_t ulPin) {
-  return (ulPin & TCAL_MASK) != 0; 
+  return (ulPin & TCAL_MASK) != 0;
 }
 
 
@@ -330,6 +331,9 @@ void registerCallbackHeld(uint32_t pin, gpioCallback callbackHeld, void* cbData,
   data->assertTime = 0;
 }
 
+bool tcal_isrNeeded() {
+  return intTriggered;
+}
 
 bool tcal_periodic() {
   //if int triggered we want to say we processed data.
@@ -359,7 +363,6 @@ bool tcal_periodic() {
       if(data->callbackPressed && !data->pressedCalled && (now - data->assertTime) > data->minAssertTimeMs) {
         data->callbackPressed(data->callbackPressedData, assert);
         data->pressedCalled = true;
-        Serial.printf("%d pressed\n");
       }
       //if help call callback again
       if(data->callbackHeld && (now - data->assertTime) > data->minAssertHeldMs) {
@@ -377,7 +380,7 @@ bool tcal_periodic() {
         continue;
       }
       //newley off
-      
+
       //if held, and now off, callback with 0 value to say not held
       if(data->callbackHeld && (now - data->assertTime) > data->minAssertHeldMs) {
         data->callbackHeld(data->callbackHeldData, assert);

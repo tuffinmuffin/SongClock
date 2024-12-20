@@ -134,10 +134,13 @@ bool initTcal9539(uint8_t addr, int32_t intPin);
 void tcal9539_reset(uint8_t addr);
 //call in main loop to handle servicing interrupts and other periodic tasks like button HELD callbacks
 bool tcal_periodic();
+//check if ISR needd lower half
+bool tcal_isrNeeded();
 
 struct tcal_pin* getTcalData(uint32_t pin);
 void registerCallbackPressed(uint32_t pin, gpioCallback callbackPressed, void* data, uint32_t minTimeMs);
 void registerCallbackHeld(uint32_t pin, gpioCallback callbackHeld, void* data, uint32_t minTimeMs);
+
 
 void enableInterrupt(uint32_t pin);
 void disableInterrupt(uint32_t pin);
